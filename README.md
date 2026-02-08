@@ -81,11 +81,17 @@ Veeam B&R / PBS Server
 
 ### 1. Scarica e copia i file
 
+Da PowerShell (non richiede git):
+
 ```powershell
-git clone https://github.com/grandir66/Veeamreporter.git
-mkdir C:\BackupMonitor
-copy Veeamreporter\agents\veeam\* C:\BackupMonitor\
+Invoke-WebRequest -Uri "https://github.com/grandir66/Veeamreporter/archive/refs/heads/main.zip" -OutFile "$env:TEMP\Veeamreporter.zip"
+Expand-Archive -Path "$env:TEMP\Veeamreporter.zip" -DestinationPath "$env:TEMP\Veeamreporter" -Force
+mkdir C:\BackupMonitor -ErrorAction SilentlyContinue
+copy "$env:TEMP\Veeamreporter\Veeamreporter-main\agents\veeam\*" C:\BackupMonitor\
+Remove-Item "$env:TEMP\Veeamreporter*" -Recurse -Force
 ```
+
+In alternativa, scarica lo ZIP manualmente da GitHub e copia il contenuto di `agents\veeam\` in `C:\BackupMonitor\`.
 
 ### 2. Configura
 
