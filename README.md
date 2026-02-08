@@ -295,6 +295,21 @@ Stato del server Veeam (CPU, memoria, uptime).
 | `memory_free_gb`   | RAM libera (GB)                    |
 | `memory_total_gb`  | RAM totale (GB)                    |
 
+### VEEAM_SERVICE_STATUS
+
+Stato dei servizi Windows di Veeam. Segnala `failed` se un servizio con avvio Automatic non e Running.
+
+| Campo                       | Descrizione                                  |
+| --------------------------- | -------------------------------------------- |
+| `services_total`            | Numero totale servizi Veeam trovati          |
+| `services_running`          | Servizi in esecuzione                        |
+| `services_stopped`          | Servizi non in esecuzione                    |
+| `services`                  | Array dettaglio per ogni servizio            |
+| `services[].name`           | Nome interno servizio (es. VeeamBackupSvc)   |
+| `services[].display_name`   | Nome visualizzato                            |
+| `services[].state`          | Stato attuale (Running, Stopped, etc.)       |
+| `services[].startup_type`   | Tipo avvio (Automatic, Manual, Disabled)     |
+
 ### VEEAM_REPOSITORY_STATUS
 
 Spazio dei repository di backup.
@@ -317,12 +332,15 @@ Risultato di un job di backup completato.
 | `job_type`                         | Tipo job (Backup, Replica, etc.)       |
 | `start_time` / `end_time`          | Inizio e fine (UTC)                    |
 | `duration_minutes`                 | Durata in minuti                       |
+| `result_message`                   | Messaggio di risultato Veeam           |
+| `bottleneck`                       | Collo di bottiglia rilevato da Veeam   |
+| `is_retry`                         | Se la sessione e un retry              |
 | `data_size_gb`                     | Dimensione dati processati (GB)        |
 | `transferred_gb`                   | Dati effettivamente trasferiti (GB)    |
 | `objects_total`                    | Numero oggetti (VM) processati         |
 | `objects_success/warning/failed`   | Conteggio per esito                    |
 | `objects`                          | Array dettaglio per ogni VM            |
-| `result_message`                   | Messaggio di risultato Veeam           |
+| `objects[].error_message`          | Motivo errore (solo se failed/warning) |
 
 ### PBS_SERVER_STATUS
 

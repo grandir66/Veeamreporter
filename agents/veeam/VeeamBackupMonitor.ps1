@@ -136,6 +136,45 @@ function Get-VeeamServerStatus {
     Send-Syslog -MessageType "VEEAM_SERVER_STATUS" -Data $status
 }
 
+function Get-VeeamServiceStatus {
+    Write-Log "Raccolta stato servizi Veeam..."
+
+    try {
+        $veeamServices = Get-Service -Name "Veeam*" -ErrorAction SilentlyContinue
+        if (-not $veeamServices) {
+            Write-Log "Nessun servizio Veeam trovato" -Level Warning
+            return
+        }
+
+        $services = @()
+        foreach ($svc in $veeamServices) {
+            $services += @{
+                name = $svc.Name
+                display_name = $svc.DisplayName
+                state = $svc.Status.ToString()
+                startup_type = $svc.StartType.ToString()
+            }
+        }
+
+        # Servizi Automatic che non sono Running = problema
+        $autoStopped = $veeamServices | Where-Object { $_.StartType -eq 'Automatic' -and $_.Status -ne 'Running' }
+        $status = if ($autoStopped) { "failed" } else { "success" }
+
+        $serviceData = @{
+            status = $status
+            services_total = $veeamServices.Count
+            services_running = ($veeamServices | Where-Object { $_.Status -eq 'Running' }).Count
+            services_stopped = ($veeamServices | Where-Object { $_.Status -ne 'Running' }).Count
+            services = $services
+        }
+
+        Send-Syslog -MessageType "VEEAM_SERVICE_STATUS" -Data $serviceData
+    }
+    catch {
+        Write-Log "Errore raccolta stato servizi: $_" -Level Warning
+    }
+}
+
 function Get-VeeamRepositoryStatus {
     Write-Log "Raccolta stato repository..."
 
@@ -198,13 +237,22 @@ function Get-VeeamJobResults {
             $taskSessions = Get-VBRTaskSession -Session $session -ErrorAction SilentlyContinue
             $objects = @()
             foreach ($task in $taskSessions) {
-                $objects += @{
+                $obj = @{
                     name = $task.Name
                     status = $task.Status.ToString().ToLower()
                     size_bytes = $task.Progress.ProcessedSize
                     duration_seconds = if ($task.Progress.Duration) { [int]$task.Progress.Duration.TotalSeconds } else { 0 }
                 }
+                # Aggiungi motivo errore/warning per oggetti non success
+                if ($task.Status -ne 'Success' -and $task.Info.Reason) {
+                    $obj.error_message = $task.Info.Reason
+                }
+                $objects += $obj
             }
+
+            # Bottleneck rilevato da Veeam
+            $bottleneck = $session.Progress.BottleneckInfo
+            $bottleneckStr = if ($bottleneck) { $bottleneck.ToString() } else { "None" }
 
             $jobData = @{
                 status = $status
@@ -216,6 +264,8 @@ function Get-VeeamJobResults {
                 duration_seconds = $duration
                 duration_minutes = [math]::Round($duration / 60, 1)
                 result_message = $session.Info.Reason
+                bottleneck = $bottleneckStr
+                is_retry = $session.IsRetryMode
                 data_size_bytes = $session.Progress.ProcessedSize
                 data_size_gb = [math]::Round($session.Progress.ProcessedSize / 1GB, 2)
                 transferred_bytes = $session.Progress.TransferedSize
@@ -253,6 +303,7 @@ try {
 
     # Raccogli e invia dati
     Get-VeeamServerStatus
+    Get-VeeamServiceStatus
     Get-VeeamRepositoryStatus
     Get-VeeamJobResults
 

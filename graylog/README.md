@@ -57,6 +57,7 @@ Gli agent inviano questi tipi di messaggio (campo `message_type`):
 ### Veeam Agent
 
 - `VEEAM_SERVER_STATUS` - Stato server Veeam
+- `VEEAM_SERVICE_STATUS` - Stato servizi Windows Veeam
 - `VEEAM_REPOSITORY_STATUS` - Stato repository
 - `VEEAM_JOB_RESULT` - Risultato job backup
 
