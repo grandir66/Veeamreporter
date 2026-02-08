@@ -1,0 +1,20 @@
+# PBS Backup Monitor - Configurazione
+
+client:
+  code: "CLI001"
+  name: "Nome Cliente"
+  site: "sede-principale"
+
+pbs:
+  host: "pbs.example.com"
+  port: 8007
+  user: "monitor@pbs"
+  token_name: "backup-monitor"
+  token_value: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  verify_ssl: false
+  lookback_hours: 24
+
+syslog:
+  server: "graylog.example.com"
+  port: 4514
+  facility: "local0"

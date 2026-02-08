@@ -1,0 +1,17 @@
+{
+    "client": {
+        "code": "CLI001",
+        "name": "Nome Cliente",
+        "site": "sede-principale"
+    },
+    "veeam": {
+        "server": "localhost",
+        "lookback_hours": 24
+    },
+    "syslog": {
+        "server": "graylog.example.com",
+        "port": 4514,
+        "facility": "local0"
+    },
+    "log_path": "C:\\BackupMonitor\\Logs"
+}

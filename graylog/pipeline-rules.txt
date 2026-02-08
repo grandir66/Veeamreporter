@@ -1,0 +1,145 @@
+// ============================================================================
+// GRAYLOG PIPELINE RULES - Backup Monitor
+// ============================================================================
+//
+// SETUP:
+// 1. System → Pipelines → Manage rules → Create Rule (per ogni regola sotto)
+// 2. System → Pipelines → Add new pipeline: "Backup Monitor Processing"
+// 3. Collega le regole alla pipeline in ordine (Stage 0, Stage 1, etc.)
+// 4. Collega la pipeline allo stream "All messages" o crea uno stream dedicato
+//
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// RULE 1: Parse JSON dal messaggio syslog (Stage 0)
+// ----------------------------------------------------------------------------
+rule "backup_monitor_parse_json"
+when
+    has_field("message") AND
+    contains(to_string($message.message), "\"message_type\":")
+then
+    // Estrai JSON dal messaggio (dopo il " - " del syslog RFC5424)
+    let msg = to_string($message.message);
+    let json_match = regex("- (\\{.+\\})$", msg);
+
+    // Se trovato, parsa il JSON
+    let json_str = json_match["0"];
+    let data = parse_json(to_string(json_str));
+
+    // Campi base
+    set_field("backup_message_type", data.message_type);
+    set_field("backup_version", data.version);
+    set_field("backup_timestamp", data.timestamp);
+    set_field("backup_status", data.status);
+    set_field("backup_agent_hostname", data.agent_hostname);
+
+    // Client info
+    set_field("client_code", data.client.code);
+    set_field("client_name", data.client.name);
+    set_field("client_site", data.client.site);
+end
+
+// ----------------------------------------------------------------------------
+// RULE 2: Parse campi specifici VEEAM_JOB_RESULT (Stage 1)
+// ----------------------------------------------------------------------------
+rule "backup_monitor_veeam_job"
+when
+    has_field("backup_message_type") AND
+    to_string($message.backup_message_type) == "VEEAM_JOB_RESULT"
+then
+    let msg = to_string($message.message);
+    let json_match = regex("- (\\{.+\\})$", msg);
+    let data = parse_json(to_string(json_match["0"]));
+
+    set_field("job_id", data.job_id);
+    set_field("job_name", data.job_name);
+    set_field("job_type", data.job_type);
+    set_field("job_start_time", data.start_time);
+    set_field("job_end_time", data.end_time);
+    set_field("job_duration_seconds", data.duration_seconds);
+    set_field("job_duration_minutes", data.duration_minutes);
+    set_field("job_result_message", data.result_message);
+    set_field("data_size_bytes", data.data_size_bytes);
+    set_field("data_size_gb", data.data_size_gb);
+    set_field("transferred_bytes", data.transferred_bytes);
+    set_field("transferred_gb", data.transferred_gb);
+    set_field("objects_total", data.objects_total);
+    set_field("objects_success", data.objects_success);
+    set_field("objects_warning", data.objects_warning);
+    set_field("objects_failed", data.objects_failed);
+end
+
+// ----------------------------------------------------------------------------
+// RULE 3: Parse campi specifici PBS_BACKUP_RESULT (Stage 1)
+// ----------------------------------------------------------------------------
+rule "backup_monitor_pbs_backup"
+when
+    has_field("backup_message_type") AND
+    to_string($message.backup_message_type) == "PBS_BACKUP_RESULT"
+then
+    let msg = to_string($message.message);
+    let json_match = regex("- (\\{.+\\})$", msg);
+    let data = parse_json(to_string(json_match["0"]));
+
+    set_field("task_id", data.task_id);
+    set_field("worker_type", data.worker_type);
+    set_field("datastore", data.datastore);
+    set_field("backup_id", data.backup_id);
+    set_field("object_type", data.object_type);
+    set_field("job_start_time", data.start_time);
+    set_field("job_end_time", data.end_time);
+    set_field("job_duration_seconds", data.duration_seconds);
+    set_field("job_duration_minutes", data.duration_minutes);
+    set_field("job_result_message", data.result_message);
+    set_field("pbs_user", data.user);
+end
+
+// ----------------------------------------------------------------------------
+// RULE 4: Parse campi specifici REPOSITORY/DATASTORE STATUS (Stage 1)
+// ----------------------------------------------------------------------------
+rule "backup_monitor_storage_status"
+when
+    has_field("backup_message_type") AND
+    (to_string($message.backup_message_type) == "VEEAM_REPOSITORY_STATUS" OR
+     to_string($message.backup_message_type) == "PBS_DATASTORE_STATUS")
+then
+    let msg = to_string($message.message);
+    let json_match = regex("- (\\{.+\\})$", msg);
+    let data = parse_json(to_string(json_match["0"]));
+
+    // Normalizza nome campo (repository_name o datastore_name)
+    let storage_name = data.repository_name;
+    set_field("storage_name",
+        regex_replace("^$", to_string(storage_name), to_string(data.datastore_name)));
+
+    set_field("storage_type", data.repository_type);
+    set_field("storage_path", data.repository_path);
+    set_field("storage_total_bytes", data.total_bytes);
+    set_field("storage_free_bytes", data.free_bytes);
+    set_field("storage_used_percent", data.used_percent);
+    set_field("storage_total_gb", data.total_gb);
+    set_field("storage_free_gb", data.free_gb);
+end
+
+// ----------------------------------------------------------------------------
+// RULE 5: Parse campi SERVER STATUS (Stage 1)
+// ----------------------------------------------------------------------------
+rule "backup_monitor_server_status"
+when
+    has_field("backup_message_type") AND
+    (to_string($message.backup_message_type) == "VEEAM_SERVER_STATUS" OR
+     to_string($message.backup_message_type) == "PBS_SERVER_STATUS")
+then
+    let msg = to_string($message.message);
+    let json_match = regex("- (\\{.+\\})$", msg);
+    let data = parse_json(to_string(json_match["0"]));
+
+    set_field("server_name", data.server_name);
+    set_field("server_version", data.veeam_version);
+    set_field("server_version",
+        regex_replace("^$", to_string($message.server_version), to_string(data.pbs_version)));
+    set_field("server_uptime_hours", data.uptime_hours);
+    set_field("server_cpu_percent", data.cpu_percent);
+    set_field("server_memory_free_gb", data.memory_free_gb);
+    set_field("server_memory_total_gb", data.memory_total_gb);
+end
