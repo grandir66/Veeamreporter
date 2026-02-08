@@ -79,14 +79,12 @@ Veeam B&R / PBS Server
 
 ## Installazione Veeam Agent (Windows)
 
-### 1. Copia i file
-
-Copia il contenuto di `agents/veeam/` nella cartella di destinazione:
+### 1. Scarica e copia i file
 
 ```powershell
-# Esempio: C:\BackupMonitor\
+git clone https://github.com/grandir66/Veeamreporter.git
 mkdir C:\BackupMonitor
-copy agents\veeam\* C:\BackupMonitor\
+copy Veeamreporter\agents\veeam\* C:\BackupMonitor\
 ```
 
 ### 2. Configura
@@ -124,29 +122,29 @@ Campi da modificare:
 - `veeam.lookback_hours` - Ore indietro per cercare job completati
 - `log_path` - Cartella log locali
 
-### 3. Testa
+### 3. Installa il task schedulato
 
-Esegui in modalita test (stampa i messaggi syslog senza inviarli):
-
-```powershell
-cd C:\BackupMonitor
-.\VeeamBackupMonitor.ps1 -TestMode
-```
-
-### 4. Installa il task schedulato
-
-Esegui come **Amministratore**:
+Esegui come **Amministratore** (il flag `-ExecutionPolicy Bypass` e necessario perche gli script scaricati da internet non sono firmati):
 
 ```powershell
-.\Install-Task.ps1 -InstallPath "C:\BackupMonitor"
+powershell -ExecutionPolicy Bypass -File "C:\BackupMonitor\Install-Task.ps1" -InstallPath "C:\BackupMonitor"
 ```
 
-Questo crea un task schedulato `VeeamBackupMonitor` che:
+L'installer automaticamente:
 
-- Viene eseguito ogni **30 minuti**
-- Gira con l'account **SYSTEM** (privilegi elevati)
+- Sblocca tutti i file `.ps1` e `.json` (rimuove il flag Zone.Identifier di Windows)
+- Crea un task schedulato `VeeamBackupMonitor` che gira ogni **30 minuti**
+- Usa l'account **SYSTEM** con privilegi elevati
 - Si avvia anche se il server e a batteria
-- Parte automaticamente se un'esecuzione viene saltata
+- Recupera esecuzioni saltate
+
+### 4. Testa
+
+Verifica il funzionamento in modalita test (stampa i messaggi syslog senza inviarli):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\BackupMonitor\VeeamBackupMonitor.ps1" -TestMode
+```
 
 ### Log
 
@@ -203,7 +201,7 @@ Per creare l'API token su PBS:
 2. Crea un token per l'utente `monitor@pbs`
 3. Copia nome e valore nel config
 
-### 4. Testa
+### 4. Testa il funzionamento
 
 ```bash
 python3 /opt/backup-monitor/pbs_monitor.py -c /etc/backup-monitor/pbs-config.yaml --test

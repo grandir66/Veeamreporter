@@ -3,7 +3,7 @@
     Installa task schedulato per Veeam Backup Monitor
 
 .EXAMPLE
-    .\Install-Task.ps1 -InstallPath "C:\BackupMonitor"
+    powershell -ExecutionPolicy Bypass -File .\Install-Task.ps1 -InstallPath "C:\BackupMonitor"
 #>
 
 param(
@@ -12,6 +12,11 @@ param(
 )
 
 #Requires -RunAsAdministrator
+
+# Sblocca script scaricati da internet (rimuove Zone.Identifier)
+Get-ChildItem -Path $InstallPath -Filter "*.ps1" | Unblock-File -ErrorAction SilentlyContinue
+Get-ChildItem -Path $InstallPath -Filter "*.json" | Unblock-File -ErrorAction SilentlyContinue
+Write-Host "File sbloccati in '$InstallPath'" -ForegroundColor Cyan
 
 $taskName = "VeeamBackupMonitor"
 $action = New-ScheduledTaskAction -Execute "powershell.exe" `
