@@ -3,10 +3,14 @@
 // ============================================================================
 //
 // SETUP:
-// 1. System → Pipelines → Manage rules → Create Rule (per ogni regola sotto)
-// 2. System → Pipelines → Add new pipeline: "Backup Monitor Processing"
+// 1. System > Pipelines > Manage rules > Create Rule (per ogni regola sotto)
+// 2. System > Pipelines > Add new pipeline: "Backup Monitor Processing"
 // 3. Collega le regole alla pipeline in ordine (Stage 0, Stage 1, etc.)
 // 4. Collega la pipeline allo stream "All messages" o crea uno stream dedicato
+//
+// NOTA: Il campo "message" di Graylog contiene il formato:
+//   MSGID - {"message_type":"...", ...}
+// Le regole estraggono il JSON dopo il " - " con regex.
 //
 // ============================================================================
 
@@ -20,11 +24,11 @@ when
 then
     // Estrai JSON dal messaggio (dopo il " - " del syslog RFC5424)
     let msg = to_string($message.message);
-    let json_match = regex("- (\\{.+\\})$", msg);
+    let json_match = regex("(\\{.+\\})\\s*$", msg);
+    let json_str = to_string(json_match["0"]);
 
-    // Se trovato, parsa il JSON
-    let json_str = json_match["0"];
-    let data = parse_json(to_string(json_str));
+    // Verifica che il JSON sia stato estratto
+    let data = parse_json(json_str);
 
     // Campi base
     set_field("backup_message_type", data.message_type);
@@ -37,6 +41,9 @@ then
     set_field("client_code", data.client.code);
     set_field("client_name", data.client.name);
     set_field("client_site", data.client.site);
+
+    // Salva JSON per le regole successive
+    set_field("backup_json", json_str);
 end
 
 // ----------------------------------------------------------------------------
@@ -47,9 +54,7 @@ when
     has_field("backup_message_type") AND
     to_string($message.backup_message_type) == "VEEAM_JOB_RESULT"
 then
-    let msg = to_string($message.message);
-    let json_match = regex("- (\\{.+\\})$", msg);
-    let data = parse_json(to_string(json_match["0"]));
+    let data = parse_json(to_string($message.backup_json));
 
     set_field("job_id", data.job_id);
     set_field("job_name", data.job_name);
@@ -77,9 +82,7 @@ when
     has_field("backup_message_type") AND
     to_string($message.backup_message_type) == "PBS_BACKUP_RESULT"
 then
-    let msg = to_string($message.message);
-    let json_match = regex("- (\\{.+\\})$", msg);
-    let data = parse_json(to_string(json_match["0"]));
+    let data = parse_json(to_string($message.backup_json));
 
     set_field("task_id", data.task_id);
     set_field("worker_type", data.worker_type);
@@ -103,9 +106,7 @@ when
     (to_string($message.backup_message_type) == "VEEAM_REPOSITORY_STATUS" OR
      to_string($message.backup_message_type) == "PBS_DATASTORE_STATUS")
 then
-    let msg = to_string($message.message);
-    let json_match = regex("- (\\{.+\\})$", msg);
-    let data = parse_json(to_string(json_match["0"]));
+    let data = parse_json(to_string($message.backup_json));
 
     // Normalizza nome campo (repository_name o datastore_name)
     let storage_name = data.repository_name;
@@ -130,9 +131,7 @@ when
     (to_string($message.backup_message_type) == "VEEAM_SERVER_STATUS" OR
      to_string($message.backup_message_type) == "PBS_SERVER_STATUS")
 then
-    let msg = to_string($message.message);
-    let json_match = regex("- (\\{.+\\})$", msg);
-    let data = parse_json(to_string(json_match["0"]));
+    let data = parse_json(to_string($message.backup_json));
 
     set_field("server_name", data.server_name);
     set_field("server_version", data.veeam_version);
