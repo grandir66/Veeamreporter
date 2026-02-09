@@ -677,28 +677,62 @@ def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode
                 if all_flag:
                     logger.info(f"Job {job_id}: configurazione 'all' (backuppa tutte le VM)")
                     try:
-                        # Ottieni tutte le VM/CT dal cluster
+                        # Ottieni tutte le VM/CT dal cluster usando /cluster/resources (più efficiente)
                         all_vms = []
                         nodes_str = job.get("nodes", "")
                         nodes_list = []
                         if nodes_str:
                             nodes_list = [n.strip() for n in nodes_str.split(",") if n.strip()]
-                        if not nodes_list:
-                            nodes_list = [node]  # Default al nodo locale
                         
-                        for n in nodes_list:
+                        # Se nodes è vuoto, usa tutte le VM del cluster
+                        if not nodes_list:
                             try:
-                                qemu_list = pvesh_get(f"/nodes/{n}/qemu")
-                                for vm in qemu_list:
-                                    all_vms.append({"vmid": str(vm.get("vmid", "")), "node": n, "type": "qemu"})
-                            except:
-                                pass
-                            try:
-                                lxc_list = pvesh_get(f"/nodes/{n}/lxc")
-                                for ct in lxc_list:
-                                    all_vms.append({"vmid": str(ct.get("vmid", "")), "node": n, "type": "lxc"})
-                            except:
-                                pass
+                                # Usa /cluster/resources per ottenere tutte le VM/CT del cluster
+                                resources = pvesh_get("/cluster/resources")
+                                for res in resources:
+                                    if res.get("type") in ["qemu", "lxc"] and res.get("template", 0) == 0:
+                                        all_vms.append({
+                                            "vmid": str(res.get("vmid", "")),
+                                            "node": res.get("node", ""),
+                                            "type": res.get("type", "qemu")
+                                        })
+                                logger.info(f"Job {job_id}: trovate {len(all_vms)} VM/CT nel cluster totale")
+                            except Exception as e:
+                                logger.warning(f"Job {job_id}: errore ottenimento VM da cluster/resources: {e}")
+                                # Fallback: cerca su tutti i nodi conosciuti
+                                try:
+                                    cluster_nodes = pvesh_get("/nodes")
+                                    nodes_list = [n.get("node", "") for n in cluster_nodes if n.get("node")]
+                                except:
+                                    nodes_list = [node]  # Ultimo fallback: solo nodo locale
+                        
+                        # Se nodes è specificato, cerca solo su quei nodi
+                        if nodes_list:
+                            for n in nodes_list:
+                                try:
+                                    qemu_list = pvesh_get(f"/nodes/{n}/qemu")
+                                    for vm in qemu_list:
+                                        if vm.get("template", 0) == 0:  # Escludi template
+                                            all_vms.append({"vmid": str(vm.get("vmid", "")), "node": n, "type": "qemu"})
+                                except:
+                                    pass
+                                try:
+                                    lxc_list = pvesh_get(f"/nodes/{n}/lxc")
+                                    for ct in lxc_list:
+                                        if ct.get("template", 0) == 0:  # Escludi template
+                                            all_vms.append({"vmid": str(ct.get("vmid", "")), "node": n, "type": "lxc"})
+                                except:
+                                    pass
+                        
+                        # Rimuovi duplicati (nel caso si usino entrambi i metodi)
+                        seen = set()
+                        unique_vms = []
+                        for vm in all_vms:
+                            vm_id = vm["vmid"]
+                            if vm_id and vm_id not in seen:
+                                seen.add(vm_id)
+                                unique_vms.append(vm)
+                        all_vms = unique_vms
                         
                         # Filtra le VM escluse
                         exclude_ids = []
@@ -709,7 +743,7 @@ def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode
                             if vm["vmid"] not in exclude_ids:
                                 vm_ids.append(vm["vmid"])
                         
-                        logger.info(f"Job {job_id}: trovati {len(vm_ids)} VM (tutte tranne {len(exclude_ids)} escluse)")
+                        logger.info(f"Job {job_id}: trovati {len(vm_ids)} VM (tutte tranne {len(exclude_ids)} escluse su {len(all_vms)} totali nel cluster)")
                     except Exception as e:
                         logger.warning(f"Job {job_id}: errore ottenimento VM per job 'all': {e}")
                         # Fallback: segna come job "all" senza elencare le VM
