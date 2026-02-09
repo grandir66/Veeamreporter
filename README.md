@@ -549,6 +549,25 @@ Risultato di un task vzdump completato.
 | `result_message`             | Messaggio di risultato                 |
 | `user`                       | Utente che ha eseguito il task         |
 
+### PVE_BACKUP_JOB
+
+Informazioni sui job di backup schedulati e le VM/CT che vengono backuppate. Inviato ogni 30 minuti per tracciare la configurazione dei backup.
+
+| Campo                        | Descrizione                            |
+| ---------------------------- | -------------------------------------- |
+| `job_id`                     | ID del job vzdump                      |
+| `node`                       | Nome del nodo PVE                      |
+| `storage`                    | Storage di destinazione                |
+| `schedule`                   | Schedulazione (cron expression)        |
+| `enabled`                    | Se il job è abilitato                  |
+| `mode`                       | Modalità backup (snapshot, suspend, stop) |
+| `compress`                   | Compressione utilizzata                 |
+| `vm_count`                   | Numero VM/CT nel job                   |
+| `vms`                        | Array dettaglio VM/CT backuppate       |
+| `vms[].vmid`                 | ID della VM/CT                         |
+| `vms[].name`                  | Nome della VM/CT                       |
+| `vms[].type`                  | Tipo (`qemu` o `lxc`)                  |
+
 ### PVE_BACKUP_COVERAGE
 
 Verifica copertura backup: VM/CT non coperte da alcun job di backup schedulato.

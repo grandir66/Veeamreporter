@@ -273,6 +273,118 @@ def collect_backup_results(node: str, syslog: SyslogSender, client: Dict,
         logger.error(f"Errore raccolta task backup: {e}")
 
 
+def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode: bool):
+    """Raccoglie informazioni sui job di backup schedulati e le VM/CT che vengono backuppate"""
+    logger.info("Raccolta job di backup schedulati...")
+
+    try:
+        backup_jobs = []
+        
+        # Prova a ottenere i job vzdump schedulati dal nodo locale
+        try:
+            vzdump_jobs = pvesh_get(f"/nodes/{node}/vzdump")
+            
+            for job in vzdump_jobs:
+                job_id = job.get("id", "")
+                if not job_id:
+                    continue
+                
+                try:
+                    # Ottieni dettagli del job vzdump
+                    job_details = pvesh_get(f"/nodes/{node}/vzdump/{job_id}")
+                    
+                    # Estrai VM/CT incluse nel backup
+                    vms_str = job_details.get("vms", "")
+                    if not vms_str:
+                        continue
+                    
+                    # Parse VM list (può essere una stringa con VMID separati da spazio, virgola o punto e virgola)
+                    vm_list = []
+                    if isinstance(vms_str, str):
+                        # Rimuovi spazi e split su vari separatori
+                        vm_ids = [v.strip() for v in re.split(r'[,;\s]+', vms_str) if v.strip() and v.strip().isdigit()]
+                        
+                        for vmid in vm_ids:
+                            vm_name = f"VM-{vmid}"
+                            vm_type = "unknown"
+                            
+                            # Prova a ottenere informazioni sulla VM/CT
+                            try:
+                                vm_info = pvesh_get(f"/nodes/{node}/qemu/{vmid}")
+                                vm_name = vm_info.get("name", f"VM-{vmid}")
+                                vm_type = "qemu"
+                            except:
+                                try:
+                                    ct_info = pvesh_get(f"/nodes/{node}/lxc/{vmid}")
+                                    vm_name = ct_info.get("name", f"CT-{vmid}")
+                                    vm_type = "lxc"
+                                except:
+                                    # VM non trovata, usa valori di default
+                                    pass
+                            
+                            vm_list.append({
+                                "vmid": vmid,
+                                "name": vm_name,
+                                "type": vm_type
+                            })
+                    
+                    if vm_list:
+                        backup_jobs.append({
+                            "job_id": job_id,
+                            "node": node,
+                            "storage": job_details.get("storage", "unknown"),
+                            "schedule": job_details.get("schedule", ""),
+                            "enabled": job_details.get("enabled", True),
+                            "mode": job_details.get("mode", "snapshot"),
+                            "compress": job_details.get("compress", ""),
+                            "vms": vm_list,
+                            "vm_count": len(vm_list)
+                        })
+                except Exception as e:
+                    logger.debug(f"Errore lettura dettagli job {job_id}: {e}")
+                    continue
+        
+        except Exception as e:
+            logger.warning(f"Errore lettura job vzdump: {e}. Tentativo metodo alternativo...")
+            # Metodo alternativo: usa backup-info per ottenere informazioni sui backup
+            try:
+                backup_info = pvesh_get("/cluster/backup-info")
+                # backup-info potrebbe contenere informazioni sui backup schedulati
+                # Questo è un fallback se vzdump non funziona
+            except Exception as e2:
+                logger.debug(f"Errore lettura backup-info: {e2}")
+        
+        # Invia un messaggio per ogni job di backup trovato
+        for job in backup_jobs:
+            if job.get("enabled", True):
+                status = "success"
+            else:
+                status = "warning"
+            
+            data = {
+                "status": status,
+                "job_id": job.get("job_id", ""),
+                "node": job.get("node", ""),
+                "storage": job.get("storage", ""),
+                "schedule": job.get("schedule", ""),
+                "enabled": job.get("enabled", True),
+                "mode": job.get("mode", ""),
+                "compress": job.get("compress", ""),
+                "vm_count": job.get("vm_count", 0),
+                "vms": job.get("vms", [])
+            }
+            
+            syslog.send("PVE_BACKUP_JOB", data, client, test_mode)
+        
+        if backup_jobs:
+            logger.info(f"Trovati {len(backup_jobs)} job di backup schedulati con {sum(j.get('vm_count', 0) for j in backup_jobs)} VM/CT totali")
+        else:
+            logger.info("Nessun job di backup schedulato trovato")
+        
+    except Exception as e:
+        logger.error(f"Errore raccolta job di backup schedulati: {e}")
+
+
 def collect_backup_coverage(syslog: SyslogSender, client: Dict, test_mode: bool):
     """Verifica VM/CT senza copertura backup schedulato"""
     logger.info("Verifica copertura backup...")
@@ -515,6 +627,7 @@ def main():
         collect_node_status(node, syslog, client, args.test)
         collect_storage_status(node, syslog, client, args.test)
         collect_backup_results(node, syslog, client, lookback, args.test)
+        collect_backup_jobs(node, syslog, client, args.test)
         collect_backup_coverage(syslog, client, args.test)
 
     logger.info("=== Completato ===")
