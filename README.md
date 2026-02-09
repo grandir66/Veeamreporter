@@ -143,80 +143,69 @@ I log vengono scritti in `C:\BackupMonitor\Logs\` con nome `veeam-monitor-YYYY-M
 
 ## Installazione PBS Agent (Linux)
 
-### 1. Installa dipendenze
+### Prerequisiti
 
-```bash
-pip3 install -r agents/pbs/requirements.txt
-```
-
-### 2. Copia i file
-
-```bash
-mkdir -p /opt/backup-monitor
-cp agents/pbs/pbs_monitor.py /opt/backup-monitor/
-
-mkdir -p /etc/backup-monitor
-cp agents/pbs/config.yaml /etc/backup-monitor/pbs-config.yaml
-```
-
-### 3. Configura
-
-Modifica `/etc/backup-monitor/pbs-config.yaml`:
-
-```yaml
-client:
-  code: "CLI001"              # Codice univoco cliente
-  name: "Nome Cliente"        # Nome cliente
-  site: "sede-principale"     # Identificativo sede
-
-pbs:
-  host: "pbs.example.com"    # Hostname o IP del server PBS
-  port: 8007                  # Porta API PBS
-  user: "monitor@pbs"         # Utente API
-  token_name: "backup-monitor"                        # Nome API token
-  token_value: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"  # Valore API token
-  verify_ssl: false           # Verifica certificato SSL
-  lookback_hours: 24          # Ore indietro per cercare task completati
-
-syslog:
-  server: "graylog.example.com"  # IP o hostname del server Graylog
-  port: 4514                      # Porta UDP syslog
-  facility: "local0"              # Facility syslog (local0-local7)
-```
-
-Per creare l'API token su PBS:
+Prima di installare, crea un API token su PBS:
 
 1. Vai in **Configuration > Access Control > API Tokens**
 2. Crea un token per l'utente `monitor@pbs`
-3. Copia nome e valore nel config
+3. Annota nome e valore del token (serviranno durante l'installazione)
 
-### 4. Testa il funzionamento
-
-```bash
-python3 /opt/backup-monitor/pbs_monitor.py -c /etc/backup-monitor/pbs-config.yaml --test
-```
-
-### 5. Installa il timer systemd
+### 1. Scarica i file
 
 ```bash
-cp agents/pbs/pbs-monitor.service /etc/systemd/system/
-cp agents/pbs/pbs-monitor.timer /etc/systemd/system/
-
-systemctl daemon-reload
-systemctl enable --now pbs-monitor.timer
+curl -L -o /tmp/veeamreporter.zip https://github.com/grandir66/Veeamreporter/archive/refs/heads/main.zip
+unzip -o /tmp/veeamreporter.zip -d /tmp/veeamreporter
+rm -f /tmp/veeamreporter.zip
 ```
 
-Il timer esegue lo script:
+### 2. Esegui l'installer
 
-- **5 minuti** dopo il boot
-- Poi ogni **30 minuti**
-- Recupera le esecuzioni perse (`Persistent=true`)
+```bash
+sudo bash /tmp/veeamreporter/Veeamreporter-main/agents/pbs/install.sh
+```
 
-Verifica stato:
+L'installer chiede interattivamente:
+
+- **Codice cliente** e **nome cliente**
+- **Sede** (default: sede-principale)
+- **Server PBS** - hostname/IP, porta, utente e API token
+- **Server Graylog** - IP o hostname e porta syslog
+
+L'installer automaticamente:
+
+- Crea un virtual environment Python in `/opt/backup-monitor/venv/`
+- Installa le dipendenze (`requests`, `pyyaml`)
+- Salva la configurazione in `/etc/backup-monitor/pbs-config.yaml`
+- Installa e attiva il timer systemd (ogni **30 minuti**)
+
+### 3. Verifica
+
+```bash
+/opt/backup-monitor/venv/bin/python /opt/backup-monitor/pbs_monitor.py -c /etc/backup-monitor/pbs-config.yaml --test
+```
+
+### Parametri aggiuntivi (opzionale)
+
+Per modificare parametri aggiuntivi, edita `/etc/backup-monitor/pbs-config.yaml`:
+
+| Campo | Descrizione | Default |
+| ----- | ----------- | ------- |
+| `pbs.verify_ssl` | Verifica certificato SSL PBS | false |
+| `pbs.lookback_hours` | Ore indietro per cercare task completati | 24 |
+| `syslog.facility` | Facility syslog (local0-local7) | local0 |
+
+### Verifica stato timer
 
 ```bash
 systemctl status pbs-monitor.timer
 systemctl list-timers | grep pbs
+```
+
+### Pulizia file temporanei
+
+```bash
+rm -rf /tmp/veeamreporter
 ```
 
 ---
