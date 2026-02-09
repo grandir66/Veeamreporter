@@ -561,6 +561,23 @@ Verifica copertura backup: VM/CT non coperte da alcun job di backup schedulato.
 | `guests[].name`              | Nome della VM/CT                       |
 | `guests[].type`              | Tipo (`qemu` o `lxc`)                  |
 
+### PVE_SERVICE_STATUS
+
+Stato dei servizi systemd importanti di Proxmox VE (equivalente a VEEAM_SERVICE_STATUS). Segnala `failed` se un servizio importante è fermo o fallito.
+
+| Campo                       | Descrizione                                  |
+| --------------------------- | -------------------------------------------- |
+| `services_total`            | Numero totale servizi verificati             |
+| `services_running`          | Servizi in esecuzione                       |
+| `services_stopped`          | Servizi non in esecuzione                    |
+| `services_failed`           | Servizi falliti                              |
+| `services`                  | Array dettaglio per ogni servizio            |
+| `services[].name`           | Nome servizio (es. pve-cluster, pveproxy)   |
+| `services[].state`          | Stato attuale (active, inactive, failed)     |
+| `services[].startup_type`   | Tipo avvio (enabled, disabled, unknown)      |
+
+Servizi monitorati: `pve-cluster`, `pve-daemon`, `pveproxy`, `pvestatd`, `pve-firewall`, `corosync`, `pve-ha-crm`, `pve-ha-lrm`.
+
 ### VEEAM_DAILY_REPORT
 
 Riepilogo giornaliero di tutti i job Veeam eseguiti nelle ultime 24 ore. Inviato una volta al giorno alle 07:00.
@@ -603,7 +620,30 @@ Riepilogo giornaliero di tutti i task backup PBS nelle ultime 24 ore. Inviato un
 
 ### PVE_DAILY_REPORT
 
-Riepilogo giornaliero di tutti i task vzdump PVE nelle ultime 24 ore. Inviato una volta al giorno alle 07:00.
+Report giornaliero completo di Proxmox VE. Inviato una volta al giorno alle 07:00 e include:
+
+- **PVE_NODE_STATUS** - Stato del nodo (CPU, memoria, uptime, versione)
+- **PVE_STORAGE_STATUS** - Stato di tutti gli storage
+- **PVE_SERVICE_STATUS** - Stato dei servizi systemd importanti
+- **PVE_BACKUP_COVERAGE** - VM/CT senza backup schedulato
+- **PVE_DAILY_REPORT** - Riepilogo di tutti i task vzdump nelle ultime 24 ore
+
+Riepilogo giornaliero di tutti i task vzdump PVE nelle ultime 24 ore:
+
+| Campo                              | Descrizione                            |
+| ---------------------------------- | -------------------------------------- |
+| `report_date`                      | Data del report (YYYY-MM-DD)           |
+| `lookback_hours`                   | Ore di lookback (default 24)           |
+| `jobs_total`                       | Numero totale task eseguiti            |
+| `jobs_success`                     | Task completati con successo           |
+| `jobs_warning`                     | Task con warning                       |
+| `jobs_failed`                      | Task falliti                           |
+| `jobs`                             | Array dettaglio per ogni task          |
+| `jobs[].vmid`                      | ID della VM/CT                         |
+| `jobs[].status`                    | Esito (success/warning/failed)         |
+| `jobs[].start_time` / `end_time`   | Inizio e fine (UTC)                    |
+| `jobs[].duration_minutes`          | Durata in minuti                       |
+| `jobs[].exit_status`               | Esito task (OK, errore, etc.)          |
 
 | Campo                              | Descrizione                            |
 | ---------------------------------- | -------------------------------------- |

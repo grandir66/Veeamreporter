@@ -302,11 +302,131 @@ def collect_backup_coverage(syslog: SyslogSender, client: Dict, test_mode: bool)
         logger.error(f"Errore verifica copertura backup: {e}")
 
 
+def collect_service_status(syslog: SyslogSender, client: Dict, test_mode: bool):
+    """Verifica stato servizi systemd importanti di Proxmox VE (equivalente a VEEAM_SERVICE_STATUS)"""
+    logger.info("Raccolta stato servizi Proxmox VE...")
+
+    try:
+        import subprocess
+        
+        # Servizi importanti di Proxmox VE
+        important_services = [
+            "pve-cluster",
+            "pve-daemon",
+            "pveproxy",
+            "pvestatd",
+            "pve-firewall",
+            "corosync",
+            "pve-ha-crm",
+            "pve-ha-lrm",
+        ]
+
+        services = []
+        services_running = 0
+        services_stopped = 0
+        services_failed = 0
+
+        for service_name in important_services:
+            try:
+                # Verifica stato servizio
+                result = subprocess.run(
+                    ["systemctl", "is-active", service_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                state = result.stdout.strip() if result.returncode == 0 else "inactive"
+
+                # Verifica tipo avvio
+                enabled_result = subprocess.run(
+                    ["systemctl", "is-enabled", service_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                startup_type = enabled_result.stdout.strip() if enabled_result.returncode == 0 else "unknown"
+
+                service_info = {
+                    "name": service_name,
+                    "state": state,
+                    "startup_type": startup_type,
+                }
+
+                services.append(service_info)
+
+                if state == "active":
+                    services_running += 1
+                elif state == "failed":
+                    services_failed += 1
+                else:
+                    services_stopped += 1
+
+            except Exception as e:
+                logger.warning(f"Errore verifica servizio {service_name}: {e}")
+                services.append({
+                    "name": service_name,
+                    "state": "unknown",
+                    "startup_type": "unknown",
+                })
+
+        # Determina status complessivo: failed se almeno un servizio importante è failed o stopped quando dovrebbe essere enabled
+        status = "success"
+        for svc in services:
+            if svc["state"] == "failed":
+                status = "failed"
+                break
+            elif svc["startup_type"] == "enabled" and svc["state"] != "active":
+                status = "failed"
+                break
+            elif svc["state"] != "active" and svc["startup_type"] == "enabled":
+                status = "warning"
+
+        data = {
+            "status": status,
+            "services_total": len(services),
+            "services_running": services_running,
+            "services_stopped": services_stopped,
+            "services_failed": services_failed,
+            "services": services,
+        }
+
+        syslog.send("PVE_SERVICE_STATUS", data, client, test_mode)
+        logger.info(f"Servizi: {services_running} running, {services_stopped} stopped, {services_failed} failed")
+
+    except Exception as e:
+        logger.error(f"Errore raccolta stato servizi: {e}")
+
+
 def collect_daily_report(node: str, syslog: SyslogSender, client: Dict,
                          lookback_hours: int, test_mode: bool):
-    """Genera report giornaliero con riepilogo di tutti i task vzdump"""
+    """Genera report giornaliero completo: stato nodo, storage e riepilogo task vzdump"""
     logger.info("Generazione report giornaliero...")
 
+    # Invia stato nodo (come Veeam invia VEEAM_SERVER_STATUS)
+    try:
+        collect_node_status(node, syslog, client, test_mode)
+    except Exception as e:
+        logger.error(f"Errore raccolta stato nodo nel report giornaliero: {e}")
+
+    # Invia stato storage (come Veeam invia VEEAM_REPOSITORY_STATUS)
+    try:
+        collect_storage_status(node, syslog, client, test_mode)
+    except Exception as e:
+        logger.error(f"Errore raccolta stato storage nel report giornaliero: {e}")
+
+    # Invia stato servizi (equivalente a VEEAM_SERVICE_STATUS)
+    try:
+        collect_service_status(syslog, client, test_mode)
+    except Exception as e:
+        logger.error(f"Errore raccolta stato servizi nel report giornaliero: {e}")
+
+    # Invia copertura backup (informazioni aggiuntive)
+    try:
+        collect_backup_coverage(syslog, client, test_mode)
+    except Exception as e:
+        logger.error(f"Errore raccolta copertura backup nel report giornaliero: {e}")
+
+    # Genera riepilogo task vzdump (equivalente a VEEAM_DAILY_REPORT)
     try:
         since = int((datetime.now(timezone.utc) - timedelta(hours=lookback_hours)).timestamp())
         tasks = pvesh_get(f"/nodes/{node}/tasks", typefilter="vzdump", since=str(since),
