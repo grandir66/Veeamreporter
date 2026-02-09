@@ -418,11 +418,20 @@ def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode
                     continue
                 
                 try:
+                    # Log struttura completa del job per debug
+                    logger.debug(f"Job {job_id} completo: {json.dumps(job, indent=2, default=str)}")
+                    
                     # Estrai VM/CT incluse nel backup
                     vms_value = job.get("vms", "")
                     all_flag = job.get("all", False)
                     
-                    logger.info(f"Job {job_id}: vms={vms_value}, all={all_flag}, type={type(vms_value)}, nodes={job.get('nodes', '')}")
+                    logger.info(f"Job {job_id}: vms={repr(vms_value)}, all={all_flag}, type={type(vms_value)}, nodes={job.get('nodes', '')}")
+                    
+                    # Prova anche altri campi che potrebbero contenere le VM
+                    # In alcuni casi potrebbe essere "vmid" o altri campi
+                    for key in ["vmid", "vmids", "guest", "guests"]:
+                        if key in job:
+                            logger.info(f"Job {job_id}: campo '{key}' trovato: {repr(job[key])}")
                     
                     # Gestisci diversi formati: stringa, lista, o None
                     vm_list = []
