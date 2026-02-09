@@ -18,3 +18,4 @@ syslog:
   server: "graylog.example.com"
   port: 4514
   facility: "local0"
+  protocol: "tcp"  # tcp (consigliato) o udp

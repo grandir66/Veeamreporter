@@ -85,18 +85,31 @@ function Send-Syslog {
     $syslogMsg = "<$priority>1 $timestamp $hostname veeam-backup-monitor $PID $MessageType - $jsonPayload"
 
     if ($TestMode) {
-        Write-Host "`n=== SYSLOG MESSAGE ===" -ForegroundColor Cyan
+        Write-Host "`n=== SYSLOG MESSAGE ($($syslogMsg.Length) bytes) ===" -ForegroundColor Cyan
         Write-Host $syslogMsg
         Write-Host "======================`n" -ForegroundColor Cyan
         return
     }
 
+    $protocol = if ($syslog.protocol) { $syslog.protocol.ToLower() } else { "tcp" }
+    
     try {
-        $udpClient = New-Object System.Net.Sockets.UdpClient
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes($syslogMsg)
-        $udpClient.Send($bytes, $bytes.Length, $syslog.server, $syslog.port) | Out-Null
-        $udpClient.Close()
-        Write-Log "Syslog inviato: $MessageType"
+        if ($protocol -eq "tcp") {
+            $tcpClient = New-Object System.Net.Sockets.TcpClient
+            $tcpClient.Connect($syslog.server, $syslog.port)
+            $stream = $tcpClient.GetStream()
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($syslogMsg + "`n")
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Close()
+            $tcpClient.Close()
+            Write-Log "Syslog inviato (TCP): $MessageType ($($syslogMsg.Length) bytes)"
+        } else {
+            $udpClient = New-Object System.Net.Sockets.UdpClient
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($syslogMsg)
+            $udpClient.Send($bytes, $bytes.Length, $syslog.server, $syslog.port) | Out-Null
+            $udpClient.Close()
+            Write-Log "Syslog inviato (UDP): $MessageType ($($syslogMsg.Length) bytes)"
+        }
     }
     catch {
         Write-Log "Errore invio syslog: $_" -Level Error

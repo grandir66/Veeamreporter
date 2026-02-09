@@ -11,7 +11,8 @@
     "syslog": {
         "server": "graylog.example.com",
         "port": 4514,
-        "facility": "local0"
+        "facility": "local0",
+        "protocol": "tcp"
     },
     "log_path": "C:\\BackupMonitor\\Logs"
 }
