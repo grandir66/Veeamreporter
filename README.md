@@ -622,14 +622,7 @@ Informazioni sui job di backup schedulati e le VM/CT che vengono backuppate. Inv
 | `vms[].type`                  | Tipo (`qemu` o `lxc`)                  |
 | `vms[].node`                 | Nodo PVE su cui risiede la VM/CT      |
 
-I messaggi vengono **inviati uno per nodo** (host): ogni payload contiene solo le VM di quel nodo, quindi nessuna ricostruzione lato Graylog. Campi aggiuntivi:
-
-| Campo                        | Descrizione                            |
-| ---------------------------- | -------------------------------------- |
-| `node`                      | Nodo PVE a cui si riferiscono le VM di questo messaggio |
-| `vm_count`                  | Numero VM nel messaggio (per questo nodo) |
-
-Se un nodo ha molte VM e il payload supera ~6KB, viene spezzato in batch con `node_batch_index` e `node_batch_total`.
+**Nota:** Il protocollo predefinito è TCP per supportare messaggi grandi (molte VM). UDP ha un limite di ~8KB.
 
 ### PVE_BACKUP_COVERAGE
 

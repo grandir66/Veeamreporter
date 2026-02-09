@@ -23,24 +23,23 @@ from typing import Any, Dict, List
 import yaml
 
 VERSION = "2.0.0"
-# Limite massimo byte per payload JSON (syslog/UDP: messaggi >8KB spesso troncati o persi)
-MAX_SYSLOG_PAYLOAD_BYTES = 6000
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
 
 class SyslogSender:
-    """Invia messaggi syslog UDP RFC 5424"""
+    """Invia messaggi syslog RFC 5424 via TCP o UDP"""
 
     FACILITY_MAP = {
         "local0": 16, "local1": 17, "local2": 18, "local3": 19,
         "local4": 20, "local5": 21, "local6": 22, "local7": 23
     }
 
-    def __init__(self, server: str, port: int, facility: str = "local0"):
+    def __init__(self, server: str, port: int, facility: str = "local0", protocol: str = "tcp"):
         self.server = server
         self.port = port
         self.facility = self.FACILITY_MAP.get(facility, 16)
+        self.protocol = protocol.lower()
 
     def send(self, message_type: str, data: Dict, client: Dict, test_mode: bool = False):
         """Invia messaggio syslog con payload JSON"""
@@ -65,14 +64,21 @@ class SyslogSender:
         syslog_msg = f"<{priority}>1 {timestamp} {hostname} pve-backup-monitor {os.getpid()} {message_type} - {json_payload}"
 
         if test_mode:
-            print(f"\n=== SYSLOG MESSAGE ===\n{syslog_msg}\n======================\n")
+            print(f"\n=== SYSLOG MESSAGE ({len(syslog_msg)} bytes) ===\n{syslog_msg}\n======================\n")
             return
 
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.sendto(syslog_msg.encode("utf-8"), (self.server, self.port))
-            sock.close()
-            logger.info(f"Syslog inviato: {message_type}")
+            if self.protocol == "tcp":
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(10)
+                sock.connect((self.server, self.port))
+                sock.sendall(syslog_msg.encode("utf-8") + b"\n")
+                sock.close()
+            else:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.sendto(syslog_msg.encode("utf-8"), (self.server, self.port))
+                sock.close()
+            logger.info(f"Syslog inviato ({self.protocol.upper()}): {message_type} ({len(syslog_msg)} bytes)")
         except Exception as e:
             logger.error(f"Errore invio syslog: {e}")
 
@@ -953,15 +959,14 @@ def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode
         logger.warning(f"Errore lettura job backup dal cluster: {e}")
         backup_jobs = []  # In caso di errore, usa lista vuota
     
-    # Invia un messaggio per ogni job di backup trovato
-    # Suddivisione per node (host): un messaggio per nodo, nessuna ricostruzione lato Graylog
+    # Invia un messaggio per ogni job di backup (TCP supporta messaggi grandi)
     for job in backup_jobs:
         if job.get("enabled", True):
             status = "success"
         else:
             status = "warning"
         
-        base_data = {
+        data = {
             "status": status,
             "job_id": job.get("job_id", ""),
             "nodes": job.get("nodes", ""),
@@ -972,43 +977,10 @@ def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode
             "compress": job.get("compress", ""),
             "all": job.get("all", False),
             "vm_count": job.get("vm_count", 0),
+            "vms": job.get("vms", [])
         }
-        vms_list = job.get("vms", [])
-
-        def _payload_size(data: Dict) -> int:
-            """Stima byte del payload JSON (come in SyslogSender.send)"""
-            p = {"message_type": "PVE_BACKUP_JOB", "version": VERSION, "timestamp": "", "client": client, "agent_hostname": "", **data}
-            return len(json.dumps(p, separators=(",", ":"), default=str).encode("utf-8"))
-
-        # Raggruppa VM per node
-        vms_by_node: Dict[str, List] = {}
-        for vm in vms_list:
-            node_name = vm.get("node", "unknown")
-            vms_by_node.setdefault(node_name, []).append(vm)
-
-        for node_name, node_vms in vms_by_node.items():
-            msg_data = {**base_data, "node": node_name, "vms": node_vms, "vm_count": len(node_vms)}
-            if _payload_size(msg_data) <= MAX_SYSLOG_PAYLOAD_BYTES:
-                syslog.send("PVE_BACKUP_JOB", msg_data, client, test_mode)
-            else:
-                # Un nodo ha troppe VM: spezza in batch senza superare il limite
-                batch_size = len(node_vms)
-                for try_n in range(len(node_vms), 0, -1):
-                    t = {**base_data, "node": node_name, "vms": node_vms[:try_n], "vm_count": try_n}
-                    if _payload_size(t) <= MAX_SYSLOG_PAYLOAD_BYTES:
-                        batch_size = try_n
-                        break
-                for i in range(0, len(node_vms), batch_size):
-                    batch = node_vms[i:i + batch_size]
-                    batch_data = {
-                        **base_data,
-                        "node": node_name,
-                        "vms": batch,
-                        "vm_count": len(batch),
-                        "node_batch_index": (i // batch_size) + 1,
-                        "node_batch_total": (len(node_vms) + batch_size - 1) // batch_size,
-                    }
-                    syslog.send("PVE_BACKUP_JOB", batch_data, client, test_mode)
+        
+        syslog.send("PVE_BACKUP_JOB", data, client, test_mode)
     
     if backup_jobs:
         logger.info(f"Trovati {len(backup_jobs)} job di backup schedulati con {sum(j.get('vm_count', 0) for j in backup_jobs)} VM/CT totali")
@@ -1307,7 +1279,8 @@ def main():
     syslog = SyslogSender(
         server=syslog_cfg["server"],
         port=syslog_cfg["port"],
-        facility=syslog_cfg.get("facility", "local0")
+        facility=syslog_cfg.get("facility", "local0"),
+        protocol=syslog_cfg.get("protocol", "tcp")
     )
 
     client = config["client"]
