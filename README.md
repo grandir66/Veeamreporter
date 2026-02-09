@@ -54,6 +54,7 @@ Veeam B&R / PBS Server
 │       ├── config.example.yaml       # Template configurazione
 │       ├── requirements.txt          # Dipendenze Python
 │       ├── install.sh                # Installer interattivo
+│       ├── update.sh                 # Script aggiornamento
 │       ├── pve-monitor.service       # Unit systemd
 │       └── pve-monitor.timer         # Timer systemd (30 min)
 ├── graylog/                          # Configurazione Graylog
@@ -304,28 +305,41 @@ rm -rf /tmp/veeamreporter
 
 ### Aggiornamento PVE Agent
 
-Dopo un `git pull` o un nuovo download da GitHub, per aggiornare un'installazione esistente senza riconfigurare:
+Per aggiornare un'installazione esistente senza riconfigurare. **Eseguire come root** sul server Proxmox VE.
+
+**Metodo 1 - Script di update (consigliato):**
 
 ```bash
-# 1. Scarica l'ultima versione da GitHub
+curl -sL -o /tmp/update-pve-monitor.sh https://raw.githubusercontent.com/grandir66/Veeamreporter/main/agents/pve/update.sh
+sudo bash /tmp/update-pve-monitor.sh
+rm -f /tmp/update-pve-monitor.sh
+```
+
+**Metodo 2 - Comandi manuali:**
+
+```bash
+# Scarica e estrai (eseguire come root)
 curl -L -o /tmp/veeamreporter.zip https://github.com/grandir66/Veeamreporter/archive/refs/heads/main.zip
 unzip -o /tmp/veeamreporter.zip -d /tmp/veeamreporter
 rm -f /tmp/veeamreporter.zip
 
-# 2. Copia i file nella cartella di installazione
-cp /tmp/veeamreporter/Veeamreporter-main/agents/pve/pve_monitor.py /opt/pve-monitor/
-cp /tmp/veeamreporter/Veeamreporter-main/agents/pve/requirements.txt /opt/pve-monitor/
+# Copia nella cartella di installazione
+cp -f /tmp/veeamreporter/Veeamreporter-main/agents/pve/pve_monitor.py /opt/pve-monitor/pve_monitor.py
+cp -f /tmp/veeamreporter/Veeamreporter-main/agents/pve/requirements.txt /opt/pve-monitor/requirements.txt
 
-# 3. Aggiorna le dipendenze Python (se requirements.txt è cambiato)
+# Aggiorna dipendenze
 /opt/pve-monitor/venv/bin/pip install -r /opt/pve-monitor/requirements.txt -q
 
-# 4. Pulizia
+# Verifica
+ls -la /opt/pve-monitor/pve_monitor.py
+
+# Pulizia
 rm -rf /tmp/veeamreporter
 ```
 
 La configurazione in `/etc/backup-monitor/pve-config.yaml` non viene modificata.
 
-Per verificare l'aggiornamento:
+Test dopo l'aggiornamento:
 ```bash
 /opt/pve-monitor/venv/bin/python /opt/pve-monitor/pve_monitor.py -c /etc/backup-monitor/pve-config.yaml --test
 ```
