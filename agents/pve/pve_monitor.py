@@ -442,139 +442,139 @@ def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode
                 logger.warning(f"Errore lettura /etc/pve/jobs.cfg: {e}")
         
         for job in cluster_jobs:
-                job_id = job.get("id", "")
-                if not job_id:
+            job_id = job.get("id", "")
+            if not job_id:
+                continue
+            
+            try:
+                # Prova a ottenere dettagli completi del job tramite API
+                try:
+                    job_details = pvesh_get(f"/cluster/backup/{job_id}")
+                    # Merge dettagli con dati base
+                    job.update(job_details)
+                    logger.debug(f"Job {job_id} dettagli completi: {json.dumps(job, indent=2, default=str)}")
+                except Exception as e:
+                    logger.debug(f"Impossibile ottenere dettagli job {job_id}: {e}")
+                
+                # Log struttura completa del job per debug
+                logger.debug(f"Job {job_id} completo: {json.dumps(job, indent=2, default=str)}")
+                
+                # Estrai VM/CT incluse nel backup
+                vms_value = job.get("vms", "")
+                all_flag = job.get("all", False)
+                
+                logger.info(f"Job {job_id}: vms={repr(vms_value)}, all={all_flag}, type={type(vms_value)}, nodes={job.get('nodes', '')}")
+                
+                # Prova anche altri campi che potrebbero contenere le VM
+                # In alcuni casi potrebbe essere "vmid" o altri campi
+                for key in ["vmid", "vmids", "guest", "guests"]:
+                    if key in job:
+                        logger.info(f"Job {job_id}: campo '{key}' trovato: {repr(job[key])}")
+                
+                # Gestisci diversi formati: stringa, lista, o None
+                vm_list = []
+                vm_ids = []
+                
+                # Se vms è una lista, usa direttamente
+                if isinstance(vms_value, list):
+                    vm_ids = [str(v) for v in vms_value if v]
+                # Se vms è una stringa, parsala
+                elif isinstance(vms_value, str) and vms_value.strip():
+                    # Parse VM list (può essere una stringa con VMID separati da spazio, virgola o punto e virgola)
+                    # Accetta sia numeri che pattern come "vm/100" o "lxc/200"
+                    vm_ids_raw = re.split(r'[,;\s]+', vms_value.strip())
+                    for v in vm_ids_raw:
+                        v = v.strip()
+                        if not v:
+                            continue
+                        # Se è nel formato "vm/100" o "lxc/200", estrai solo il numero
+                        match = re.match(r'(?:vm|lxc|qemu|ct)[/:]?(\d+)', v, re.IGNORECASE)
+                        if match:
+                            vm_ids.append(match.group(1))
+                        # Altrimenti, se è solo un numero, usalo direttamente
+                        elif v.isdigit():
+                            vm_ids.append(v)
+                        else:
+                            logger.debug(f"Formato VMID non riconosciuto: {v}")
+                
+                # Se non ci sono VM specificate ma all=True, gestisci come job "all"
+                if not vm_ids and all_flag:
+                    logger.info(f"Job {job_id}: configurazione 'all' (backuppa tutte le VM)")
+                    backup_jobs.append({
+                        "job_id": job_id,
+                        "nodes": job.get("nodes", node),
+                        "storage": job.get("storage", "unknown"),
+                        "schedule": job.get("schedule", ""),
+                        "enabled": job.get("enabled", True) if "enabled" in job else True,
+                        "mode": job.get("mode", "snapshot"),
+                        "compress": job.get("compress", ""),
+                        "all": True,
+                        "vms": [],
+                        "vm_count": 0
+                    })
                     continue
                 
-                try:
-                    # Prova a ottenere dettagli completi del job tramite API
-                    try:
-                        job_details = pvesh_get(f"/cluster/backup/{job_id}")
-                        # Merge dettagli con dati base
-                        job.update(job_details)
-                        logger.debug(f"Job {job_id} dettagli completi: {json.dumps(job, indent=2, default=str)}")
-                    except Exception as e:
-                        logger.debug(f"Impossibile ottenere dettagli job {job_id}: {e}")
+                # Se non ci sono VM da processare, salta questo job
+                if not vm_ids:
+                    logger.warning(f"Job {job_id}: nessuna VM trovata nel campo 'vms' (valore: {vms_value})")
+                    continue
                     
-                    # Log struttura completa del job per debug
-                    logger.debug(f"Job {job_id} completo: {json.dumps(job, indent=2, default=str)}")
+                # Determina i nodi interessati dal job
+                nodes_str = job.get("nodes", "")
+                nodes_list = []
+                if nodes_str:
+                    nodes_list = [n.strip() for n in nodes_str.split(",") if n.strip()]
+                if not nodes_list:
+                    nodes_list = [node]  # Default al nodo locale
+                
+                logger.info(f"Job {job_id}: trovati {len(vm_ids)} VM IDs: {vm_ids[:10]}{'...' if len(vm_ids) > 10 else ''}")
+                
+                for vmid in vm_ids:
+                    vm_name = f"VM-{vmid}"
+                    vm_type = "unknown"
+                    vm_node = nodes_list[0]  # Prova prima con il primo nodo
                     
-                    # Estrai VM/CT incluse nel backup
-                    vms_value = job.get("vms", "")
-                    all_flag = job.get("all", False)
-                    
-                    logger.info(f"Job {job_id}: vms={repr(vms_value)}, all={all_flag}, type={type(vms_value)}, nodes={job.get('nodes', '')}")
-                    
-                    # Prova anche altri campi che potrebbero contenere le VM
-                    # In alcuni casi potrebbe essere "vmid" o altri campi
-                    for key in ["vmid", "vmids", "guest", "guests"]:
-                        if key in job:
-                            logger.info(f"Job {job_id}: campo '{key}' trovato: {repr(job[key])}")
-                    
-                    # Gestisci diversi formati: stringa, lista, o None
-                    vm_list = []
-                    vm_ids = []
-                    
-                    # Se vms è una lista, usa direttamente
-                    if isinstance(vms_value, list):
-                        vm_ids = [str(v) for v in vms_value if v]
-                    # Se vms è una stringa, parsala
-                    elif isinstance(vms_value, str) and vms_value.strip():
-                        # Parse VM list (può essere una stringa con VMID separati da spazio, virgola o punto e virgola)
-                        # Accetta sia numeri che pattern come "vm/100" o "lxc/200"
-                        vm_ids_raw = re.split(r'[,;\s]+', vms_value.strip())
-                        for v in vm_ids_raw:
-                            v = v.strip()
-                            if not v:
-                                continue
-                            # Se è nel formato "vm/100" o "lxc/200", estrai solo il numero
-                            match = re.match(r'(?:vm|lxc|qemu|ct)[/:]?(\d+)', v, re.IGNORECASE)
-                            if match:
-                                vm_ids.append(match.group(1))
-                            # Altrimenti, se è solo un numero, usalo direttamente
-                            elif v.isdigit():
-                                vm_ids.append(v)
-                            else:
-                                logger.debug(f"Formato VMID non riconosciuto: {v}")
-                    
-                    # Se non ci sono VM specificate ma all=True, gestisci come job "all"
-                    if not vm_ids and all_flag:
-                        logger.info(f"Job {job_id}: configurazione 'all' (backuppa tutte le VM)")
-                        backup_jobs.append({
-                            "job_id": job_id,
-                            "nodes": job.get("nodes", node),
-                            "storage": job.get("storage", "unknown"),
-                            "schedule": job.get("schedule", ""),
-                            "enabled": job.get("enabled", True) if "enabled" in job else True,
-                            "mode": job.get("mode", "snapshot"),
-                            "compress": job.get("compress", ""),
-                            "all": True,
-                            "vms": [],
-                            "vm_count": 0
-                        })
-                        continue
-                    
-                    # Se non ci sono VM da processare, salta questo job
-                    if not vm_ids:
-                        logger.warning(f"Job {job_id}: nessuna VM trovata nel campo 'vms' (valore: {vms_value})")
-                        continue
-                        
-                    # Determina i nodi interessati dal job
-                    nodes_str = job.get("nodes", "")
-                    nodes_list = []
-                    if nodes_str:
-                        nodes_list = [n.strip() for n in nodes_str.split(",") if n.strip()]
-                    if not nodes_list:
-                        nodes_list = [node]  # Default al nodo locale
-                    
-                    logger.info(f"Job {job_id}: trovati {len(vm_ids)} VM IDs: {vm_ids[:10]}{'...' if len(vm_ids) > 10 else ''}")
-                    
-                    for vmid in vm_ids:
-                        vm_name = f"VM-{vmid}"
-                        vm_type = "unknown"
-                        vm_node = nodes_list[0]  # Prova prima con il primo nodo
-                        
-                        # Prova a ottenere informazioni sulla VM/CT su tutti i nodi
-                        for try_node in nodes_list:
+                    # Prova a ottenere informazioni sulla VM/CT su tutti i nodi
+                    for try_node in nodes_list:
+                        try:
+                            vm_info = pvesh_get(f"/nodes/{try_node}/qemu/{vmid}")
+                            vm_name = vm_info.get("name", f"VM-{vmid}")
+                            vm_type = "qemu"
+                            vm_node = try_node
+                            break
+                        except:
                             try:
-                                vm_info = pvesh_get(f"/nodes/{try_node}/qemu/{vmid}")
-                                vm_name = vm_info.get("name", f"VM-{vmid}")
-                                vm_type = "qemu"
+                                ct_info = pvesh_get(f"/nodes/{try_node}/lxc/{vmid}")
+                                vm_name = ct_info.get("name", f"CT-{vmid}")
+                                vm_type = "lxc"
                                 vm_node = try_node
                                 break
                             except:
-                                try:
-                                    ct_info = pvesh_get(f"/nodes/{try_node}/lxc/{vmid}")
-                                    vm_name = ct_info.get("name", f"CT-{vmid}")
-                                    vm_type = "lxc"
-                                    vm_node = try_node
-                                    break
-                                except:
-                                    continue
-                        
-                        vm_list.append({
-                            "vmid": vmid,
-                            "name": vm_name,
-                            "type": vm_type,
-                            "node": vm_node
-                        })
+                                continue
                     
-                    if vm_list:
-                        backup_jobs.append({
-                            "job_id": job_id,
-                            "nodes": job.get("nodes", node),
-                            "storage": job.get("storage", "unknown"),
-                            "schedule": job.get("schedule", ""),
-                            "enabled": job.get("enabled", True) if "enabled" in job else True,
-                            "mode": job.get("mode", "snapshot"),
-                            "compress": job.get("compress", ""),
-                            "all": job.get("all", False),
-                            "vms": vm_list,
-                            "vm_count": len(vm_list)
-                        })
-                except Exception as e:
-                    logger.debug(f"Errore elaborazione job {job_id}: {e}")
-                    continue
+                    vm_list.append({
+                        "vmid": vmid,
+                        "name": vm_name,
+                        "type": vm_type,
+                        "node": vm_node
+                    })
+                
+                if vm_list:
+                    backup_jobs.append({
+                        "job_id": job_id,
+                        "nodes": job.get("nodes", node),
+                        "storage": job.get("storage", "unknown"),
+                        "schedule": job.get("schedule", ""),
+                        "enabled": job.get("enabled", True) if "enabled" in job else True,
+                        "mode": job.get("mode", "snapshot"),
+                        "compress": job.get("compress", ""),
+                        "all": job.get("all", False),
+                        "vms": vm_list,
+                        "vm_count": len(vm_list)
+                    })
+            except Exception as e:
+                logger.debug(f"Errore elaborazione job {job_id}: {e}")
+                continue
         
         except Exception as e:
             logger.warning(f"Errore lettura job backup dal cluster: {e}")
