@@ -40,26 +40,45 @@ if ! command -v unzip &>/dev/null; then
 fi
 
 # --- Installa python3-venv se mancante ---
-if ! python3 -m venv --help &>/dev/null; then
-    echo "Installazione python3-venv..."
-    if command -v apt-get &>/dev/null; then
-        # Rileva versione Python installata (es. 3.13)
-        PYTHON_VERSION=$(python3 --version 2>&1 | sed -E 's/.*Python ([0-9]+\.[0-9]+).*/\1/')
-        if [[ -n "$PYTHON_VERSION" ]] && apt-cache show "python${PYTHON_VERSION}-venv" &>/dev/null; then
-            echo "Installazione python${PYTHON_VERSION}-venv..."
-            apt-get update -qq && apt-get install -y -qq "python${PYTHON_VERSION}-venv"
-        else
-            echo "Installazione python3-venv..."
-            apt-get update -qq && apt-get install -y -qq python3-venv
-        fi
-    elif command -v dnf &>/dev/null; then
-        dnf install -y python3-virtualenv
-    elif command -v yum &>/dev/null; then
-        yum install -y python3-virtualenv
-    else
-        echo "Errore: impossibile installare python3-venv. Installarlo manualmente."
-        exit 1
+if command -v apt-get &>/dev/null; then
+    # Rileva versione Python installata (es. 3.13)
+    PYTHON_VERSION=$(python3 --version 2>&1 | sed -E 's/.*Python ([0-9]+\.[0-9]+).*/\1/')
+    VENV_PACKAGE=""
+    
+    # Determina quale pacchetto venv installare
+    if [[ -n "$PYTHON_VERSION" ]] && apt-cache show "python${PYTHON_VERSION}-venv" &>/dev/null; then
+        VENV_PACKAGE="python${PYTHON_VERSION}-venv"
+    elif apt-cache show python3-venv &>/dev/null; then
+        VENV_PACKAGE="python3-venv"
     fi
+    
+    # Verifica se il pacchetto è già installato
+    if [[ -n "$VENV_PACKAGE" ]]; then
+        if ! dpkg -l | grep -q "^ii.*${VENV_PACKAGE} "; then
+            echo "Installazione ${VENV_PACKAGE}..."
+            apt-get update -qq && apt-get install -y -qq "$VENV_PACKAGE"
+        fi
+    else
+        echo "Avviso: pacchetto python3-venv non trovato nei repository. Tentativo installazione python3-venv generico..."
+        apt-get update -qq && apt-get install -y -qq python3-venv || {
+            echo "Errore: impossibile installare python3-venv. Installarlo manualmente con:"
+            echo "  apt-get install python${PYTHON_VERSION}-venv"
+            exit 1
+        }
+    fi
+elif command -v dnf &>/dev/null; then
+    if ! rpm -q python3-virtualenv &>/dev/null; then
+        echo "Installazione python3-virtualenv..."
+        dnf install -y python3-virtualenv
+    fi
+elif command -v yum &>/dev/null; then
+    if ! rpm -q python3-virtualenv &>/dev/null; then
+        echo "Installazione python3-virtualenv..."
+        yum install -y python3-virtualenv
+    fi
+else
+    echo "Errore: impossibile installare python3-venv. Installarlo manualmente."
+    exit 1
 fi
 
 # --- Copia file ---
