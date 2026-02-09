@@ -407,22 +407,35 @@ def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode
     try:
         backup_jobs = []
         
-        # Prova a ottenere i job vzdump schedulati dal nodo locale
+        # Ottieni i job vzdump schedulati dal cluster (endpoint corretto: /cluster/backup)
         try:
-            vzdump_jobs = pvesh_get(f"/nodes/{node}/vzdump")
+            cluster_jobs = pvesh_get("/cluster/backup")
             
-            for job in vzdump_jobs:
+            for job in cluster_jobs:
                 job_id = job.get("id", "")
                 if not job_id:
                     continue
                 
                 try:
-                    # Ottieni dettagli del job vzdump
-                    job_details = pvesh_get(f"/nodes/{node}/vzdump/{job_id}")
-                    
                     # Estrai VM/CT incluse nel backup
-                    vms_str = job_details.get("vms", "")
+                    vms_str = job.get("vms", "")
                     if not vms_str:
+                        # Se vms è vuoto ma "all" è True, significa che il job backuppa tutte le VM
+                        if job.get("all", False):
+                            # Per job con "all", non possiamo elencare tutte le VM facilmente
+                            # Invia comunque il job senza lista VM
+                            backup_jobs.append({
+                                "job_id": job_id,
+                                "nodes": job.get("nodes", node),
+                                "storage": job.get("storage", "unknown"),
+                                "schedule": job.get("schedule", ""),
+                                "enabled": job.get("enabled", True) if "enabled" in job else True,
+                                "mode": job.get("mode", "snapshot"),
+                                "compress": job.get("compress", ""),
+                                "all": True,
+                                "vms": [],
+                                "vm_count": 0
+                            })
                         continue
                     
                     # Parse VM list (può essere una stringa con VMID separati da spazio, virgola o punto e virgola)
@@ -431,55 +444,63 @@ def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode
                         # Rimuovi spazi e split su vari separatori
                         vm_ids = [v.strip() for v in re.split(r'[,;\s]+', vms_str) if v.strip() and v.strip().isdigit()]
                         
+                        # Determina i nodi interessati dal job
+                        nodes_str = job.get("nodes", "")
+                        nodes_list = []
+                        if nodes_str:
+                            nodes_list = [n.strip() for n in nodes_str.split(",") if n.strip()]
+                        if not nodes_list:
+                            nodes_list = [node]  # Default al nodo locale
+                        
                         for vmid in vm_ids:
                             vm_name = f"VM-{vmid}"
                             vm_type = "unknown"
+                            vm_node = nodes_list[0]  # Prova prima con il primo nodo
                             
-                            # Prova a ottenere informazioni sulla VM/CT
-                            try:
-                                vm_info = pvesh_get(f"/nodes/{node}/qemu/{vmid}")
-                                vm_name = vm_info.get("name", f"VM-{vmid}")
-                                vm_type = "qemu"
-                            except:
+                            # Prova a ottenere informazioni sulla VM/CT su tutti i nodi
+                            for try_node in nodes_list:
                                 try:
-                                    ct_info = pvesh_get(f"/nodes/{node}/lxc/{vmid}")
-                                    vm_name = ct_info.get("name", f"CT-{vmid}")
-                                    vm_type = "lxc"
+                                    vm_info = pvesh_get(f"/nodes/{try_node}/qemu/{vmid}")
+                                    vm_name = vm_info.get("name", f"VM-{vmid}")
+                                    vm_type = "qemu"
+                                    vm_node = try_node
+                                    break
                                 except:
-                                    # VM non trovata, usa valori di default
-                                    pass
+                                    try:
+                                        ct_info = pvesh_get(f"/nodes/{try_node}/lxc/{vmid}")
+                                        vm_name = ct_info.get("name", f"CT-{vmid}")
+                                        vm_type = "lxc"
+                                        vm_node = try_node
+                                        break
+                                    except:
+                                        continue
                             
                             vm_list.append({
                                 "vmid": vmid,
                                 "name": vm_name,
-                                "type": vm_type
+                                "type": vm_type,
+                                "node": vm_node
                             })
                     
-                    if vm_list:
+                    if vm_list or job.get("all", False):
                         backup_jobs.append({
                             "job_id": job_id,
-                            "node": node,
-                            "storage": job_details.get("storage", "unknown"),
-                            "schedule": job_details.get("schedule", ""),
-                            "enabled": job_details.get("enabled", True),
-                            "mode": job_details.get("mode", "snapshot"),
-                            "compress": job_details.get("compress", ""),
+                            "nodes": job.get("nodes", node),
+                            "storage": job.get("storage", "unknown"),
+                            "schedule": job.get("schedule", ""),
+                            "enabled": job.get("enabled", True) if "enabled" in job else True,
+                            "mode": job.get("mode", "snapshot"),
+                            "compress": job.get("compress", ""),
+                            "all": job.get("all", False),
                             "vms": vm_list,
                             "vm_count": len(vm_list)
                         })
                 except Exception as e:
-                    logger.debug(f"Errore lettura dettagli job {job_id}: {e}")
+                    logger.debug(f"Errore elaborazione job {job_id}: {e}")
                     continue
         
         except Exception as e:
-            logger.warning(f"Errore lettura job vzdump: {e}. Tentativo metodo alternativo...")
-            # Metodo alternativo: usa backup-info per ottenere informazioni sui backup
-            try:
-                backup_info = pvesh_get("/cluster/backup-info")
-                # backup-info potrebbe contenere informazioni sui backup schedulati
-                # Questo è un fallback se vzdump non funziona
-            except Exception as e2:
-                logger.debug(f"Errore lettura backup-info: {e2}")
+            logger.warning(f"Errore lettura job backup dal cluster: {e}")
         
         # Invia un messaggio per ogni job di backup trovato
         for job in backup_jobs:
@@ -491,12 +512,13 @@ def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode
             data = {
                 "status": status,
                 "job_id": job.get("job_id", ""),
-                "node": job.get("node", ""),
+                "nodes": job.get("nodes", ""),
                 "storage": job.get("storage", ""),
                 "schedule": job.get("schedule", ""),
                 "enabled": job.get("enabled", True),
                 "mode": job.get("mode", ""),
                 "compress": job.get("compress", ""),
+                "all": job.get("all", False),
                 "vm_count": job.get("vm_count", 0),
                 "vms": job.get("vms", [])
             }

@@ -566,17 +566,19 @@ Informazioni sui job di backup schedulati e le VM/CT che vengono backuppate. Inv
 | Campo                        | Descrizione                            |
 | ---------------------------- | -------------------------------------- |
 | `job_id`                     | ID del job vzdump                      |
-| `node`                       | Nome del nodo PVE                      |
+| `nodes`                      | Nodi PVE interessati (può essere multipli) |
 | `storage`                    | Storage di destinazione                |
 | `schedule`                   | Schedulazione (cron expression)        |
 | `enabled`                    | Se il job è abilitato                  |
 | `mode`                       | Modalità backup (snapshot, suspend, stop) |
 | `compress`                   | Compressione utilizzata                 |
-| `vm_count`                   | Numero VM/CT nel job                   |
+| `all`                        | Se il job backuppa tutte le VM (true/false) |
+| `vm_count`                   | Numero VM/CT nel job (0 se all=true)  |
 | `vms`                        | Array dettaglio VM/CT backuppate       |
 | `vms[].vmid`                 | ID della VM/CT                         |
 | `vms[].name`                  | Nome della VM/CT                       |
 | `vms[].type`                  | Tipo (`qemu` o `lxc`)                  |
+| `vms[].node`                 | Nodo PVE su cui risiede la VM/CT      |
 
 ### PVE_BACKUP_COVERAGE
 
