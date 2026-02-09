@@ -131,10 +131,23 @@ function Get-VeeamServerStatus {
     Write-Log "Raccolta stato server Veeam..."
 
     try {
-        $version = (Get-ItemProperty "HKLM:\SOFTWARE\Veeam\Veeam Backup and Replication" -ErrorAction SilentlyContinue).CoreVersion
+        # Versione Veeam (registry con fallback su DLL)
+        $version = $null
+        try {
+            $version = (Get-ItemProperty "HKLM:\SOFTWARE\Veeam\Veeam Backup and Replication" -ErrorAction SilentlyContinue).CoreVersion
+            if (-not $version) {
+                $dll = "C:\Program Files\Veeam\Backup and Replication\Backup\Veeam.Backup.Core.dll"
+                if (Test-Path $dll) {
+                    $version = (Get-Item $dll).VersionInfo.ProductVersion
+                }
+            }
+        }
+        catch {
+            Write-Log "Errore lettura versione Veeam: $_" -Level Warning
+        }
         Write-Log "Versione Veeam: $version"
 
-        # Licenza
+        # Licenza (solo Get-VBRInstalledLicense, no InstanceLicenseSummary che puo bloccarsi)
         $licenseData = @{}
         try {
             Write-Log "Lettura licenza..."
@@ -146,33 +159,25 @@ function Get-VeeamServerStatus {
                 license_expiration = if ($license.ExpirationDate) { $license.ExpirationDate.ToString("yyyy-MM-dd") } else { $null }
                 support_expiration = if ($license.SupportExpirationDate) { $license.SupportExpirationDate.ToString("yyyy-MM-dd") } else { $null }
                 support_id = $license.SupportId
+                licensed_instances = $license.InstanceLicenseSummary.LicensedInstancesNumber
+                used_instances = $license.InstanceLicenseSummary.UsedInstancesNumber
             }
             Write-Log "Licenza: $($license.Edition) - $($license.Status)"
-
-            try {
-                $instances = Get-VBRInstanceLicenseSummary
-                $licenseData.licensed_instances = $instances.LicensedInstancesNumber
-                $licenseData.used_instances = $instances.UsedInstancesNumber
-                Write-Log "Istanze: $($instances.UsedInstancesNumber)/$($instances.LicensedInstancesNumber)"
-            }
-            catch {
-                Write-Log "Info istanze licenza non disponibili: $_" -Level Warning
-            }
         }
         catch {
             Write-Log "Errore lettura licenza: $_" -Level Warning
         }
 
-        # Sistema operativo (uptime, memoria)
+        # Sistema operativo (uptime, memoria) - con timeout 10s sulle chiamate CIM
         Write-Log "Lettura info sistema..."
         $uptimeHours = 0
         $memFreeGb = 0
         $memTotalGb = 0
         try {
-            $os = Get-CimInstance Win32_OperatingSystem
+            $os = Get-CimInstance Win32_OperatingSystem -OperationTimeoutSec 10
             $uptimeHours = [math]::Round($os.LastBootUpTime.Subtract((Get-Date)).TotalHours * -1, 1)
             $memFreeGb = [math]::Round($os.FreePhysicalMemory / 1MB, 2)
-            $memTotalGb = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 2)
+            $memTotalGb = [math]::Round((Get-CimInstance Win32_ComputerSystem -OperationTimeoutSec 10).TotalPhysicalMemory / 1GB, 2)
             Write-Log "Sistema: uptime ${uptimeHours}h, RAM ${memFreeGb}/${memTotalGb} GB"
         }
         catch {
