@@ -1,0 +1,14 @@
+# PVE Backup Monitor - Configurazione
+
+client:
+  code: "CLI001"
+  name: "Nome Cliente"
+  site: "sede-principale"
+
+pve:
+  lookback_hours: 24
+
+syslog:
+  server: "graylog.example.com"
+  port: 4514
+  facility: "local0"

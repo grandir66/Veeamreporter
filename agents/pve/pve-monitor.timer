@@ -1,0 +1,10 @@
+[Unit]
+Description=PVE Backup Monitor - ogni 30 minuti
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

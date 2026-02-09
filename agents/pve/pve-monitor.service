@@ -1,0 +1,10 @@
+[Unit]
+Description=PVE Backup Monitor
+After=network.target pveproxy.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/pve-monitor/venv/bin/python /opt/pve-monitor/pve_monitor.py -c /etc/backup-monitor/pve-config.yaml
+
+[Install]
+WantedBy=multi-user.target

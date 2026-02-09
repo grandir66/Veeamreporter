@@ -8,6 +8,8 @@
 // 3. Collega le regole alla pipeline in ordine (Stage 0, Stage 1, etc.)
 // 4. Collega la pipeline allo stream "All messages" o crea uno stream dedicato
 //
+// REGOLE: 7 totali (1 Stage 0 + 6 Stage 1)
+//
 // NOTA: Il campo "message" di Graylog contiene il formato:
 //   MSGID - {"message_type":"...", ...}
 // Le regole estraggono il JSON dopo il " - " con regex.
@@ -98,22 +100,27 @@ then
 end
 
 // ----------------------------------------------------------------------------
-// RULE 4: Parse campi specifici REPOSITORY/DATASTORE STATUS (Stage 1)
+// RULE 4: Parse campi specifici REPOSITORY/DATASTORE/STORAGE STATUS (Stage 1)
 // ----------------------------------------------------------------------------
 rule "backup_monitor_storage_status"
 when
     has_field("backup_message_type") AND
     (to_string($message.backup_message_type) == "VEEAM_REPOSITORY_STATUS" OR
-     to_string($message.backup_message_type) == "PBS_DATASTORE_STATUS")
+     to_string($message.backup_message_type) == "PBS_DATASTORE_STATUS" OR
+     to_string($message.backup_message_type) == "PVE_STORAGE_STATUS")
 then
     let data = parse_json(to_string($message.backup_json));
 
-    // Normalizza nome campo (repository_name o datastore_name)
+    // Normalizza nome campo (repository_name, datastore_name o storage_name)
     let storage_name = data.repository_name;
     set_field("storage_name",
         regex_replace("^$", to_string(storage_name), to_string(data.datastore_name)));
+    set_field("storage_name",
+        regex_replace("^$", to_string($message.storage_name), to_string(data.storage_name)));
 
     set_field("storage_type", data.repository_type);
+    set_field("storage_type",
+        regex_replace("^$", to_string($message.storage_type), to_string(data.storage_type)));
     set_field("storage_path", data.repository_path);
     set_field("storage_total_bytes", data.total_bytes);
     set_field("storage_free_bytes", data.free_bytes);
@@ -129,7 +136,8 @@ rule "backup_monitor_server_status"
 when
     has_field("backup_message_type") AND
     (to_string($message.backup_message_type) == "VEEAM_SERVER_STATUS" OR
-     to_string($message.backup_message_type) == "PBS_SERVER_STATUS")
+     to_string($message.backup_message_type) == "PBS_SERVER_STATUS" OR
+     to_string($message.backup_message_type) == "PVE_NODE_STATUS")
 then
     let data = parse_json(to_string($message.backup_json));
 
@@ -137,8 +145,44 @@ then
     set_field("server_version", data.veeam_version);
     set_field("server_version",
         regex_replace("^$", to_string($message.server_version), to_string(data.pbs_version)));
+    set_field("server_version",
+        regex_replace("^$", to_string($message.server_version), to_string(data.pve_version)));
     set_field("server_uptime_hours", data.uptime_hours);
     set_field("server_cpu_percent", data.cpu_percent);
     set_field("server_memory_free_gb", data.memory_free_gb);
     set_field("server_memory_total_gb", data.memory_total_gb);
+end
+
+// ----------------------------------------------------------------------------
+// RULE 6: Parse campi specifici PVE_BACKUP_RESULT (Stage 1)
+// ----------------------------------------------------------------------------
+rule "backup_monitor_pve_backup"
+when
+    has_field("backup_message_type") AND
+    to_string($message.backup_message_type) == "PVE_BACKUP_RESULT"
+then
+    let data = parse_json(to_string($message.backup_json));
+
+    set_field("task_id", data.task_id);
+    set_field("vmid", data.vmid);
+    set_field("job_start_time", data.start_time);
+    set_field("job_end_time", data.end_time);
+    set_field("job_duration_seconds", data.duration_seconds);
+    set_field("job_duration_minutes", data.duration_minutes);
+    set_field("job_exit_status", data.exit_status);
+    set_field("job_result_message", data.result_message);
+    set_field("pve_user", data.user);
+end
+
+// ----------------------------------------------------------------------------
+// RULE 7: Parse campi specifici PVE_BACKUP_COVERAGE (Stage 1)
+// ----------------------------------------------------------------------------
+rule "backup_monitor_pve_coverage"
+when
+    has_field("backup_message_type") AND
+    to_string($message.backup_message_type) == "PVE_BACKUP_COVERAGE"
+then
+    let data = parse_json(to_string($message.backup_json));
+
+    set_field("not_backed_up_count", data.not_backed_up_count);
 end

@@ -42,12 +42,20 @@ Veeam B&R / PBS Server
 │   │   ├── VeeamBackupMonitor.ps1    # Script principale di monitoraggio
 │   │   ├── config.json               # Configurazione agent
 │   │   └── Install-Task.ps1          # Installer scheduled task
-│   └── pbs/                          # Agent Linux
-│       ├── pbs_monitor.py            # Script principale di monitoraggio
+│   ├── pbs/                          # Agent PBS (Linux)
+│   │   ├── pbs_monitor.py            # Script principale di monitoraggio
+│   │   ├── config.yaml               # Configurazione agent
+│   │   ├── requirements.txt          # Dipendenze Python
+│   │   ├── install.sh                # Installer interattivo
+│   │   ├── pbs-monitor.service       # Unit systemd
+│   │   └── pbs-monitor.timer         # Timer systemd (30 min)
+│   └── pve/                          # Agent Proxmox VE (Linux)
+│       ├── pve_monitor.py            # Script principale di monitoraggio
 │       ├── config.yaml               # Configurazione agent
 │       ├── requirements.txt          # Dipendenze Python
-│       ├── pbs-monitor.service       # Unit systemd
-│       └── pbs-monitor.timer         # Timer systemd (30 min)
+│       ├── install.sh                # Installer interattivo
+│       ├── pve-monitor.service       # Unit systemd
+│       └── pve-monitor.timer         # Timer systemd (30 min)
 ├── graylog/                          # Configurazione Graylog
 │   ├── README.md                     # Istruzioni setup Graylog
 │   ├── extractors.json               # Extractor JSON per input
@@ -70,6 +78,12 @@ Veeam B&R / PBS Server
 - Python 3.6+
 - Pacchetti: `requests`, `pyyaml`
 - API Token PBS con permessi di lettura
+
+### PVE Agent (Proxmox VE)
+
+- **Proxmox VE** 7.0+ installato sul server
+- Python 3.6+
+- Accesso root (usa `pvesh` locale, nessun token necessario)
 
 ### Graylog
 
@@ -203,6 +217,70 @@ systemctl list-timers | grep pbs
 ```
 
 ### Pulizia file temporanei
+
+```bash
+rm -rf /tmp/veeamreporter
+```
+
+---
+
+## Installazione PVE Agent (Proxmox VE)
+
+Agent per monitorare backup vzdump direttamente sul server Proxmox VE, senza necessita di PBS. Usa `pvesh` (CLI nativo PVE) e non richiede autenticazione perche gira come root sul nodo.
+
+Scarica i file:
+
+```bash
+curl -L -o /tmp/veeamreporter.zip https://github.com/grandir66/Veeamreporter/archive/refs/heads/main.zip
+unzip -o /tmp/veeamreporter.zip -d /tmp/veeamreporter
+rm -f /tmp/veeamreporter.zip
+```
+
+### Esegui l'installer PVE
+
+```bash
+sudo bash /tmp/veeamreporter/Veeamreporter-main/agents/pve/install.sh
+```
+
+L'installer chiede interattivamente:
+
+- **Codice cliente** e **nome cliente**
+- **Sede** (default: sede-principale)
+- **Server Graylog** - IP o hostname e porta syslog
+
+Non vengono chieste credenziali PVE perche lo script usa `pvesh` localmente come root.
+
+L'installer automaticamente:
+
+- Verifica che `pvesh` sia presente (conferma che e un server Proxmox VE)
+- Crea un virtual environment Python in `/opt/pve-monitor/venv/`
+- Installa la dipendenza (`pyyaml`)
+- Salva la configurazione in `/etc/backup-monitor/pve-config.yaml`
+- Installa e attiva il timer systemd (ogni **30 minuti**)
+
+### 3. Verifica PVE
+
+```bash
+/opt/pve-monitor/venv/bin/python /opt/pve-monitor/pve_monitor.py -c /etc/backup-monitor/pve-config.yaml --test
+```
+
+### Parametri aggiuntivi PVE (opzionale)
+
+Per modificare parametri aggiuntivi, edita `/etc/backup-monitor/pve-config.yaml`:
+
+| Campo | Descrizione | Default |
+| ----- | ----------- | ------- |
+| `pve.lookback_hours` | Ore indietro per cercare task completati | 24 |
+| `syslog.facility` | Facility syslog (local0-local7) | local0 |
+
+### Verifica stato timer PVE
+
+```bash
+systemctl status pve-monitor.timer
+systemctl list-timers | grep pve
+```
+
+### Pulizia file temporanei PVE
 
 ```bash
 rm -rf /tmp/veeamreporter
@@ -354,6 +432,58 @@ Risultato di un task di backup PBS.
 | `result_message`             | Stato task PBS                         |
 | `user`                       | Utente che ha eseguito il task         |
 
+### PVE_NODE_STATUS
+
+Stato del nodo Proxmox VE (CPU, memoria, uptime).
+
+| Campo                              | Descrizione                        |
+| ---------------------------------- | ---------------------------------- |
+| `server_name`                      | Nome nodo PVE                      |
+| `pve_version`                      | Versione Proxmox VE                |
+| `uptime_hours`                     | Ore di uptime                      |
+| `cpu_percent`                      | Utilizzo CPU %                     |
+| `memory_used_percent`              | RAM occupata %                     |
+| `memory_total_gb`                  | RAM totale (GB)                    |
+| `load_average`                     | Load average [1m, 5m, 15m]         |
+
+### PVE_STORAGE_STATUS
+
+Spazio degli storage Proxmox VE (local, NFS, CIFS, PBS backend, etc.).
+
+| Campo                              | Descrizione                        |
+| ---------------------------------- | ---------------------------------- |
+| `storage_name`                     | Nome storage                       |
+| `storage_type`                     | Tipo (dir, nfs, cifs, pbs, etc.)   |
+| `content`                          | Contenuto (backup, images, etc.)   |
+| `total_gb` / `used_gb` / `free_gb` | Spazio (GB)                        |
+| `used_percent`                     | Percentuale occupata               |
+
+### PVE_BACKUP_RESULT
+
+Risultato di un task vzdump completato.
+
+| Campo                        | Descrizione                            |
+| ---------------------------- | -------------------------------------- |
+| `task_id`                    | UPID del task                          |
+| `vmid`                       | ID della VM/CT                         |
+| `start_time` / `end_time`    | Inizio e fine (UTC)                    |
+| `duration_minutes`           | Durata in minuti                       |
+| `exit_status`                | Esito task (OK, errore, etc.)          |
+| `result_message`             | Messaggio di risultato                 |
+| `user`                       | Utente che ha eseguito il task         |
+
+### PVE_BACKUP_COVERAGE
+
+Verifica copertura backup: VM/CT non coperte da alcun job di backup schedulato.
+
+| Campo                        | Descrizione                            |
+| ---------------------------- | -------------------------------------- |
+| `not_backed_up_count`        | Numero VM/CT senza backup              |
+| `guests`                     | Array dettaglio VM/CT non coperte      |
+| `guests[].vmid`              | ID della VM/CT                         |
+| `guests[].name`              | Nome della VM/CT                       |
+| `guests[].type`              | Tipo (`qemu` o `lxc`)                  |
+
 ---
 
 ## Soglie di Allarme Storage
@@ -413,6 +543,23 @@ journalctl -u pbs-monitor.service -n 50
 
 # Esegui manualmente il service
 systemctl start pbs-monitor.service
+```
+
+### Proxmox VE - PVE Agent
+
+```bash
+# Esegui manualmente in test
+/opt/pve-monitor/venv/bin/python /opt/pve-monitor/pve_monitor.py -c /etc/backup-monitor/pve-config.yaml --test
+
+# Controlla lo stato del timer
+systemctl status pve-monitor.timer
+journalctl -u pve-monitor.service -n 50
+
+# Esegui manualmente il service
+systemctl start pve-monitor.service
+
+# Verifica che pvesh funzioni
+pvesh get /nodes/$(hostname)/status --output-format json
 ```
 
 ### Verifica Ricezione Graylog
