@@ -282,17 +282,28 @@ function Get-VeeamRepositoryStatus {
 function Get-VeeamJobResults {
     Write-Log "Raccolta risultati job backup..."
 
-    $lookbackHours = $Script:Config.veeam.lookback_hours
-    $cutoffTime = (Get-Date).AddHours(-$lookbackHours)
+    try {
+        $lookbackHours = $Script:Config.veeam.lookback_hours
+        $cutoffTime = (Get-Date).AddHours(-$lookbackHours)
 
-    # Backup Jobs
-    $jobs = Get-VBRJob -WarningAction SilentlyContinue
-    foreach ($job in $jobs) {
-        $sessions = Get-VBRBackupSession | Where-Object {
-            $_.JobId -eq $job.Id -and $_.EndTime -gt $cutoffTime -and $_.EndTime -ne $null
-        } | Sort-Object EndTime -Descending | Select-Object -First 1
+        # Carica tutti i job
+        $jobs = Get-VBRJob -WarningAction SilentlyContinue
+        Write-Log "Trovati $($jobs.Count) job"
 
-        foreach ($session in $sessions) {
+        # Carica TUTTE le sessioni recenti UNA SOLA volta (evita N query al DB)
+        Write-Log "Caricamento sessioni recenti..."
+        $allSessions = Get-VBRBackupSession | Where-Object {
+            $_.EndTime -gt $cutoffTime -and $_.EndTime -ne $null
+        }
+        Write-Log "Trovate $($allSessions.Count) sessioni nelle ultime ${lookbackHours}h"
+
+        foreach ($job in $jobs) {
+            # Filtra in memoria (veloce)
+            $session = $allSessions | Where-Object { $_.JobId -eq $job.Id } |
+                Sort-Object EndTime -Descending | Select-Object -First 1
+
+            if (-not $session) { continue }
+
             $status = switch ($session.Result.ToString()) {
                 "Success" { "success" }
                 "Warning" { "warning" }
@@ -314,14 +325,12 @@ function Get-VeeamJobResults {
                     size_bytes = $task.Progress.ProcessedSize
                     duration_seconds = if ($task.Progress.Duration) { [int]$task.Progress.Duration.TotalSeconds } else { 0 }
                 }
-                # Aggiungi motivo errore/warning per oggetti non success
                 if ($task.Status -ne 'Success' -and $task.Info.Reason) {
                     $obj.error_message = $task.Info.Reason
                 }
                 $objects += $obj
             }
 
-            # Bottleneck rilevato da Veeam
             $bottleneck = $session.Progress.BottleneckInfo
             $bottleneckStr = if ($bottleneck) { $bottleneck.ToString() } else { "None" }
 
@@ -349,7 +358,11 @@ function Get-VeeamJobResults {
             }
 
             Send-Syslog -MessageType "VEEAM_JOB_RESULT" -Data $jobData
+            Write-Log "Job '$($job.Name)': $status"
         }
+    }
+    catch {
+        Write-Log "Errore raccolta risultati job: $_" -Level Error
     }
 }
 
@@ -360,13 +373,20 @@ function Get-VeeamDailyReport {
     $cutoffTime = (Get-Date).AddHours(-$lookbackHours)
 
     $jobs = Get-VBRJob -WarningAction SilentlyContinue
+
+    # Carica TUTTE le sessioni recenti UNA SOLA volta
+    Write-Log "Caricamento sessioni per report..."
+    $allSessions = Get-VBRBackupSession | Where-Object {
+        $_.EndTime -gt $cutoffTime -and $_.EndTime -ne $null
+    }
+    Write-Log "Sessioni trovate: $($allSessions.Count)"
+
     $allJobResults = @()
 
     foreach ($job in $jobs) {
-        # Prendi TUTTE le sessioni nelle ultime 24h (non solo l'ultima)
-        $sessions = Get-VBRBackupSession | Where-Object {
-            $_.JobId -eq $job.Id -and $_.EndTime -gt $cutoffTime -and $_.EndTime -ne $null
-        } | Sort-Object EndTime -Descending
+        # Filtra in memoria per job
+        $sessions = $allSessions | Where-Object { $_.JobId -eq $job.Id } |
+            Sort-Object EndTime -Descending
 
         foreach ($session in $sessions) {
             $status = switch ($session.Result.ToString()) {
