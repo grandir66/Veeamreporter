@@ -130,12 +130,13 @@ function Initialize-Veeam {
 function Get-VeeamServerStatus {
     Write-Log "Raccolta stato server Veeam..."
 
-    $serverInfo = Get-VBRServerSession
     $version = (Get-ItemProperty "HKLM:\SOFTWARE\Veeam\Veeam Backup and Replication" -ErrorAction SilentlyContinue).CoreVersion
+    Write-Log "Versione Veeam: $version"
 
     # Licenza
     $licenseData = @{}
     try {
+        Write-Log "Lettura licenza..."
         $license = Get-VBRInstalledLicense
         $licenseData = @{
             license_status = $license.Status.ToString()
@@ -145,12 +146,13 @@ function Get-VeeamServerStatus {
             support_expiration = if ($license.SupportExpirationDate) { $license.SupportExpirationDate.ToString("yyyy-MM-dd") } else { $null }
             support_id = $license.SupportId
         }
+        Write-Log "Licenza: $($license.Edition) - $($license.Status)"
 
-        # Istanze licenziate
         try {
             $instances = Get-VBRInstanceLicenseSummary
             $licenseData.licensed_instances = $instances.LicensedInstancesNumber
             $licenseData.used_instances = $instances.UsedInstancesNumber
+            Write-Log "Istanze: $($instances.UsedInstancesNumber)/$($instances.LicensedInstancesNumber)"
         }
         catch {
             Write-Log "Info istanze licenza non disponibili: $_" -Level Warning
@@ -160,15 +162,38 @@ function Get-VeeamServerStatus {
         Write-Log "Errore lettura licenza: $_" -Level Warning
     }
 
+    # Sistema operativo (uptime, memoria)
+    Write-Log "Lettura info sistema..."
+    $os = Get-CimInstance Win32_OperatingSystem
+    $uptimeHours = [math]::Round($os.LastBootUpTime.Subtract((Get-Date)).TotalHours * -1, 1)
+    $memFreeGb = [math]::Round($os.FreePhysicalMemory / 1MB, 2)
+    $memTotalGb = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 2)
+
+    # CPU - uso contatore performance (piu affidabile e veloce di Win32_Processor)
+    Write-Log "Lettura CPU..."
+    $cpuPercent = 0
+    try {
+        $cpuPercent = [math]::Round((Get-Counter '\Processor(_Total)\% Processor Time' -ErrorAction Stop).CounterSamples[0].CookedValue, 1)
+    }
+    catch {
+        Write-Log "Get-Counter fallito, fallback WMI..." -Level Warning
+        try {
+            $cpuPercent = [math]::Round((Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average, 1)
+        }
+        catch {
+            Write-Log "Errore lettura CPU: $_" -Level Warning
+        }
+    }
+
     $status = @{
         status = "success"
         server_name = $env:COMPUTERNAME
         veeam_version = $version
         server_time = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-        uptime_hours = [math]::Round((Get-CimInstance Win32_OperatingSystem).LastBootUpTime.Subtract((Get-Date)).TotalHours * -1, 1)
-        cpu_percent = [math]::Round((Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average, 1)
-        memory_free_gb = [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB, 2)
-        memory_total_gb = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 2)
+        uptime_hours = $uptimeHours
+        cpu_percent = $cpuPercent
+        memory_free_gb = $memFreeGb
+        memory_total_gb = $memTotalGb
     } + $licenseData
 
     Send-Syslog -MessageType "VEEAM_SERVER_STATUS" -Data $status
