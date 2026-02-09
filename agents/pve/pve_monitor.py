@@ -23,6 +23,8 @@ from typing import Any, Dict, List
 import yaml
 
 VERSION = "2.0.0"
+# Limite massimo byte per payload JSON (syslog/UDP: messaggi >8KB spesso troncati o persi)
+MAX_SYSLOG_PAYLOAD_BYTES = 6000
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -952,13 +954,14 @@ def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode
         backup_jobs = []  # In caso di errore, usa lista vuota
     
     # Invia un messaggio per ogni job di backup trovato
+    # I messaggi grandi vengono suddivisi in chunk (limite syslog ~6KB)
     for job in backup_jobs:
         if job.get("enabled", True):
             status = "success"
         else:
             status = "warning"
         
-        data = {
+        base_data = {
             "status": status,
             "job_id": job.get("job_id", ""),
             "nodes": job.get("nodes", ""),
@@ -969,10 +972,37 @@ def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode
             "compress": job.get("compress", ""),
             "all": job.get("all", False),
             "vm_count": job.get("vm_count", 0),
-            "vms": job.get("vms", [])
         }
-        
-        syslog.send("PVE_BACKUP_JOB", data, client, test_mode)
+        vms_list = job.get("vms", [])
+
+        def _payload_size(data: Dict) -> int:
+            """Stima byte del payload JSON (come in SyslogSender.send)"""
+            p = {"message_type": "PVE_BACKUP_JOB", "version": VERSION, "timestamp": "", "client": client, "agent_hostname": "", **data}
+            return len(json.dumps(p, separators=(",", ":"), default=str).encode("utf-8"))
+
+        chunk_size = len(vms_list)
+        for try_n in range(len(vms_list), 0, -1):
+            td = {**base_data, "vms": vms_list[:try_n]}
+            if _payload_size(td) <= MAX_SYSLOG_PAYLOAD_BYTES:
+                chunk_size = try_n
+                break
+
+        if chunk_size >= len(vms_list):
+            # Un solo messaggio
+            base_data["vms"] = vms_list
+            syslog.send("PVE_BACKUP_JOB", base_data, client, test_mode)
+        else:
+            # Più chunk
+            for i in range(0, len(vms_list), chunk_size):
+                chunk = vms_list[i:i + chunk_size]
+                chunk_data = {
+                    **base_data,
+                    "vms": chunk,
+                    "chunk_index": (i // chunk_size) + 1,
+                    "chunk_total": (len(vms_list) + chunk_size - 1) // chunk_size,
+                    "total_vm_count": len(vms_list),
+                }
+                syslog.send("PVE_BACKUP_JOB", chunk_data, client, test_mode)
     
     if backup_jobs:
         logger.info(f"Trovati {len(backup_jobs)} job di backup schedulati con {sum(j.get('vm_count', 0) for j in backup_jobs)} VM/CT totali")

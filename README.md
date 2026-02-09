@@ -622,6 +622,16 @@ Informazioni sui job di backup schedulati e le VM/CT che vengono backuppate. Inv
 | `vms[].type`                  | Tipo (`qemu` o `lxc`)                  |
 | `vms[].node`                 | Nodo PVE su cui risiede la VM/CT      |
 
+Quando il payload supera ~6KB (limite syslog/UDP), il messaggio viene suddiviso in più invii con gli stessi metadati del job e i campi aggiuntivi:
+
+| Campo                        | Descrizione                            |
+| ---------------------------- | -------------------------------------- |
+| `chunk_index`                | Numero chunk (1-based)                  |
+| `chunk_total`                | Totale chunk per questo job            |
+| `total_vm_count`             | Numero totale VM nel job (invariato tra i chunk) |
+
+La sincronizzazione con il database deve accodare le VM di tutti i chunk con stesso `job_id` prima di salvare.
+
 ### PVE_BACKUP_COVERAGE
 
 Verifica copertura backup: VM/CT non coperte da alcun job di backup schedulato.
