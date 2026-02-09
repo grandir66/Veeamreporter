@@ -622,15 +622,14 @@ Informazioni sui job di backup schedulati e le VM/CT che vengono backuppate. Inv
 | `vms[].type`                  | Tipo (`qemu` o `lxc`)                  |
 | `vms[].node`                 | Nodo PVE su cui risiede la VM/CT      |
 
-Quando il payload supera ~6KB (limite syslog/UDP), il messaggio viene suddiviso in più invii con gli stessi metadati del job e i campi aggiuntivi:
+I messaggi vengono **inviati uno per nodo** (host): ogni payload contiene solo le VM di quel nodo, quindi nessuna ricostruzione lato Graylog. Campi aggiuntivi:
 
 | Campo                        | Descrizione                            |
 | ---------------------------- | -------------------------------------- |
-| `chunk_index`                | Numero chunk (1-based)                  |
-| `chunk_total`                | Totale chunk per questo job            |
-| `total_vm_count`             | Numero totale VM nel job (invariato tra i chunk) |
+| `node`                      | Nodo PVE a cui si riferiscono le VM di questo messaggio |
+| `vm_count`                  | Numero VM nel messaggio (per questo nodo) |
 
-La sincronizzazione con il database deve accodare le VM di tutti i chunk con stesso `job_id` prima di salvare.
+Se un nodo ha molte VM e il payload supera ~6KB, viene spezzato in batch con `node_batch_index` e `node_batch_total`.
 
 ### PVE_BACKUP_COVERAGE
 
