@@ -19,12 +19,18 @@
 
 [CmdletBinding()]
 param(
-    [string]$ConfigPath = "$PSScriptRoot\config.json",
+    [string]$ConfigPath,
     [switch]$TestMode,
     [switch]$DailyReport
 )
 
 $ErrorActionPreference = "Stop"
+
+# Risolvi ConfigPath: $PSScriptRoot puo essere vuoto in certi contesti di esecuzione
+if (-not $ConfigPath) {
+    $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+    $ConfigPath = Join-Path $scriptDir "config.json"
+}
 $Script:Version = "2.0.0"
 
 #region Logging
