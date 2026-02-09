@@ -235,9 +235,10 @@ def collect_backup_results(node: str, syslog: SyslogSender, client: Dict,
         tasks = pvesh_get(f"/nodes/{node}/tasks", typefilter="vzdump", since=str(since),
                           limit="500", source="all")
 
-        # Filtra solo task completati (status = "stopped")
-        completed = [t for t in tasks if t.get("status") == "stopped"]
-        logger.info(f"Trovati {len(completed)} task vzdump completati")
+        # Filtra task completati (status può essere "stopped", "job errors", o altri stati di completamento)
+        # Escludi solo task ancora in esecuzione ("running")
+        completed = [t for t in tasks if t.get("status") != "running"]
+        logger.info(f"Trovati {len(completed)} task vzdump completati (su {len(tasks)} totali)")
 
         # Raggruppa task per job (task che iniziano nello stesso momento con lo stesso utente sono probabilmente dello stesso job)
         jobs_dict = {}
@@ -614,35 +615,32 @@ def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode
         backup_jobs = []  # In caso di errore, usa lista vuota
     
     # Invia un messaggio per ogni job di backup trovato
-        for job in backup_jobs:
-            if job.get("enabled", True):
-                status = "success"
-            else:
-                status = "warning"
-            
-            data = {
-                "status": status,
-                "job_id": job.get("job_id", ""),
-                "nodes": job.get("nodes", ""),
-                "storage": job.get("storage", ""),
-                "schedule": job.get("schedule", ""),
-                "enabled": job.get("enabled", True),
-                "mode": job.get("mode", ""),
-                "compress": job.get("compress", ""),
-                "all": job.get("all", False),
-                "vm_count": job.get("vm_count", 0),
-                "vms": job.get("vms", [])
-            }
-            
-            syslog.send("PVE_BACKUP_JOB", data, client, test_mode)
-        
-        if backup_jobs:
-            logger.info(f"Trovati {len(backup_jobs)} job di backup schedulati con {sum(j.get('vm_count', 0) for j in backup_jobs)} VM/CT totali")
+    for job in backup_jobs:
+        if job.get("enabled", True):
+            status = "success"
         else:
-            logger.info("Nessun job di backup schedulato trovato")
+            status = "warning"
         
-    except Exception as e:
-        logger.error(f"Errore raccolta job di backup schedulati: {e}")
+        data = {
+            "status": status,
+            "job_id": job.get("job_id", ""),
+            "nodes": job.get("nodes", ""),
+            "storage": job.get("storage", ""),
+            "schedule": job.get("schedule", ""),
+            "enabled": job.get("enabled", True),
+            "mode": job.get("mode", ""),
+            "compress": job.get("compress", ""),
+            "all": job.get("all", False),
+            "vm_count": job.get("vm_count", 0),
+            "vms": job.get("vms", [])
+        }
+        
+        syslog.send("PVE_BACKUP_JOB", data, client, test_mode)
+    
+    if backup_jobs:
+        logger.info(f"Trovati {len(backup_jobs)} job di backup schedulati con {sum(j.get('vm_count', 0) for j in backup_jobs)} VM/CT totali")
+    else:
+        logger.info("Nessun job di backup schedulato trovato")
 
 
 def collect_backup_coverage(syslog: SyslogSender, client: Dict, test_mode: bool):
