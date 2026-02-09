@@ -93,42 +93,7 @@ Remove-Item "$env:TEMP\Veeamreporter*" -Recurse -Force
 
 In alternativa, scarica lo ZIP manualmente da GitHub e copia il contenuto di `agents\veeam\` in `C:\BackupMonitor\`.
 
-### 2. Configura
-
-Modifica `C:\BackupMonitor\config.json`:
-
-```json
-{
-    "client": {
-        "code": "CLI001",
-        "name": "Nome Cliente",
-        "site": "sede-principale"
-    },
-    "veeam": {
-        "server": "localhost",
-        "lookback_hours": 24
-    },
-    "syslog": {
-        "server": "graylog.example.com",
-        "port": 4514,
-        "facility": "local0"
-    },
-    "log_path": "C:\\BackupMonitor\\Logs"
-}
-```
-
-Campi da modificare:
-
-- `client.code` - Codice univoco cliente
-- `client.name` - Nome cliente
-- `client.site` - Identificativo sede
-- `syslog.server` - IP o hostname del server Graylog
-- `syslog.port` - Porta UDP syslog (default: 4514)
-- `syslog.facility` - Facility syslog (local0-local7)
-- `veeam.lookback_hours` - Ore indietro per cercare job completati
-- `log_path` - Cartella log locali
-
-### 3. Installa il task schedulato
+### 2. Installa
 
 Esegui come **Amministratore** (il flag `-ExecutionPolicy Bypass` e necessario perche gli script scaricati da internet non sono firmati):
 
@@ -136,7 +101,15 @@ Esegui come **Amministratore** (il flag `-ExecutionPolicy Bypass` e necessario p
 powershell -ExecutionPolicy Bypass -File "C:\BackupMonitor\Install-Task.ps1" -InstallPath "C:\BackupMonitor"
 ```
 
-L'installer automaticamente:
+L'installer chiede interattivamente:
+
+- **Codice cliente** (es. CLI001)
+- **Nome cliente** (es. Azienda Srl)
+- **Sede** (default: sede-principale)
+- **Server Graylog** - IP o hostname
+- **Porta syslog** (default: 4514)
+
+I dati inseriti vengono salvati automaticamente in `config.json`. Poi l'installer:
 
 - Sblocca tutti i file `.ps1` e `.json` (rimuove il flag Zone.Identifier di Windows)
 - Crea un task schedulato `VeeamBackupMonitor` che gira ogni **30 minuti**
@@ -144,7 +117,17 @@ L'installer automaticamente:
 - Si avvia anche se il server e a batteria
 - Recupera esecuzioni saltate
 
-### 4. Testa
+### Configurazione avanzata (opzionale)
+
+Per modificare parametri aggiuntivi, edita manualmente `C:\BackupMonitor\config.json`:
+
+| Campo | Descrizione | Default |
+| ----- | ----------- | ------- |
+| `syslog.facility` | Facility syslog (local0-local7) | local0 |
+| `veeam.lookback_hours` | Ore indietro per cercare job completati | 24 |
+| `log_path` | Cartella log locali | C:\BackupMonitor\Logs |
+
+### 3. Testa
 
 Verifica il funzionamento in modalita test (stampa i messaggi syslog senza inviarli):
 
