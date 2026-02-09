@@ -33,37 +33,80 @@ echo ""
 pveversion 2>/dev/null || true
 echo ""
 
+# --- Aggiorna repository (necessario su Proxmox VE) ---
+echo "Aggiornamento repository..."
+apt-get update -qq || {
+    echo "Errore: impossibile aggiornare repository. Verificare connessione di rete e configurazione apt."
+    exit 1
+}
+
 # --- Installa unzip se mancante ---
 if ! command -v unzip &>/dev/null; then
     echo "Installazione unzip..."
-    apt-get update -qq && apt-get install -y -qq unzip
+    apt-get install -y -qq unzip || {
+        echo "Errore: impossibile installare unzip."
+        exit 1
+    }
 fi
 
 # --- Installa python3-venv se mancante ---
 # Rileva versione Python installata (es. 3.13)
 PYTHON_VERSION=$(python3 --version 2>&1 | sed -E 's/.*Python ([0-9]+\.[0-9]+).*/\1/')
+echo "Python versione rilevata: ${PYTHON_VERSION}"
+
+VENV_INSTALLED=false
 VENV_PACKAGE=""
 
-# Determina quale pacchetto venv installare
-if [[ -n "$PYTHON_VERSION" ]] && apt-cache show "python${PYTHON_VERSION}-venv" &>/dev/null; then
-    VENV_PACKAGE="python${PYTHON_VERSION}-venv"
-elif apt-cache show python3-venv &>/dev/null; then
-    VENV_PACKAGE="python3-venv"
-fi
-
-# Verifica se il pacchetto è già installato
-if [[ -n "$VENV_PACKAGE" ]]; then
-    if ! dpkg -l | grep -q "^ii.*${VENV_PACKAGE} "; then
-        echo "Installazione ${VENV_PACKAGE}..."
-        apt-get update -qq && apt-get install -y -qq "$VENV_PACKAGE"
-    fi
+# Verifica se un pacchetto venv è già installato
+if dpkg -l | grep -qE "^ii.*python[0-9.]+-venv "; then
+    VENV_INSTALLED=true
+    echo "python3-venv già installato."
 else
-    echo "Avviso: pacchetto python3-venv non trovato nei repository. Tentativo installazione python3-venv generico..."
-    apt-get update -qq && apt-get install -y -qq python3-venv || {
-        echo "Errore: impossibile installare python3-venv. Installarlo manualmente con:"
-        echo "  apt-get install python${PYTHON_VERSION}-venv"
+    # Prova prima con la versione specifica (es. python3.13-venv)
+    if [[ -n "$PYTHON_VERSION" ]]; then
+        SPECIFIC_PACKAGE="python${PYTHON_VERSION}-venv"
+        if apt-cache show "$SPECIFIC_PACKAGE" &>/dev/null 2>&1; then
+            VENV_PACKAGE="$SPECIFIC_PACKAGE"
+            echo "Trovato pacchetto specifico: ${VENV_PACKAGE}"
+        fi
+    fi
+    
+    # Se non trovato, prova con python3-venv generico
+    if [[ -z "$VENV_PACKAGE" ]] && apt-cache show python3-venv &>/dev/null 2>&1; then
+        VENV_PACKAGE="python3-venv"
+        echo "Usando pacchetto generico: ${VENV_PACKAGE}"
+    fi
+    
+    # Installa il pacchetto trovato
+    if [[ -n "$VENV_PACKAGE" ]]; then
+        echo "Installazione ${VENV_PACKAGE}..."
+        apt-get install -y -qq "$VENV_PACKAGE" || {
+            echo ""
+            echo "Errore: impossibile installare ${VENV_PACKAGE}."
+            echo ""
+            echo "Su Proxmox VE potrebbe essere necessario:"
+            echo "  1. Verificare che i repository Debian siano abilitati"
+            echo "  2. Installare manualmente con:"
+            echo "     apt-get install ${VENV_PACKAGE}"
+            echo ""
+            echo "Se il pacchetto non esiste, provare:"
+            echo "     apt-get install python3-venv"
+            exit 1
+        }
+        VENV_INSTALLED=true
+    else
+        echo ""
+        echo "Errore: pacchetto python3-venv non trovato nei repository."
+        echo ""
+        echo "Su Proxmox VE potrebbe essere necessario abilitare i repository Debian standard."
+        echo "Installare manualmente con:"
+        if [[ -n "$PYTHON_VERSION" ]]; then
+            echo "  apt-get install python${PYTHON_VERSION}-venv"
+        fi
+        echo "  oppure"
+        echo "  apt-get install python3-venv"
         exit 1
-    }
+    fi
 fi
 
 # --- Copia file ---
@@ -74,9 +117,40 @@ cp "$SCRIPT_DIR/requirements.txt" "$INSTALL_DIR/"
 
 # --- Crea virtual environment ---
 echo "Creazione virtual environment..."
-python3 -m venv "$INSTALL_DIR/venv"
-"$INSTALL_DIR/venv/bin/pip" install --upgrade pip --quiet
-"$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt" --quiet
+if ! python3 -m venv "$INSTALL_DIR/venv"; then
+    echo ""
+    echo "Errore: impossibile creare virtual environment."
+    echo "Verificare che python3-venv sia installato correttamente:"
+    echo "  dpkg -l | grep python.*venv"
+    echo ""
+    echo "Se non installato, eseguire:"
+    if [[ -n "$PYTHON_VERSION" ]]; then
+        echo "  apt-get install python${PYTHON_VERSION}-venv"
+    else
+        echo "  apt-get install python3-venv"
+    fi
+    exit 1
+fi
+
+# Verifica che pip sia disponibile nel venv
+if [[ ! -f "$INSTALL_DIR/venv/bin/pip" ]]; then
+    echo ""
+    echo "Errore: pip non disponibile nel virtual environment."
+    echo "Il pacchetto python3-venv potrebbe non essere installato correttamente."
+    exit 1
+fi
+
+echo "Aggiornamento pip..."
+"$INSTALL_DIR/venv/bin/pip" install --upgrade pip --quiet || {
+    echo "Avviso: impossibile aggiornare pip, continuo con versione installata..."
+}
+
+echo "Installazione dipendenze..."
+"$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt" --quiet || {
+    echo "Errore: impossibile installare dipendenze."
+    echo "Verificare il file requirements.txt e la connessione di rete."
+    exit 1
+}
 echo "Dipendenze installate."
 
 # --- Configurazione ---

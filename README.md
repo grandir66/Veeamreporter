@@ -232,7 +232,15 @@ rm -rf /tmp/veeamreporter
 
 Agent per monitorare backup vzdump direttamente sul server Proxmox VE, senza necessita di PBS. Usa `pvesh` (CLI nativo PVE) e non richiede autenticazione perche gira come root sul nodo.
 
-Scarica i file:
+### Prerequisiti
+
+- **Proxmox VE** 7.0+ installato
+- Accesso root (lo script verifica automaticamente)
+- Connessione internet per scaricare dipendenze
+
+**Nota su Proxmox VE:** Su alcune installazioni Proxmox VE potrebbero essere necessari i repository Debian standard per installare `python3-venv`. Se l'installazione fallisce, verificare che i repository siano abilitati.
+
+### Scarica i file
 
 ```bash
 curl -L -o /tmp/veeamreporter.zip https://github.com/grandir66/Veeamreporter/archive/refs/heads/main.zip
@@ -240,13 +248,15 @@ unzip -o /tmp/veeamreporter.zip -d /tmp/veeamreporter
 rm -f /tmp/veeamreporter.zip
 ```
 
+> **Nota:** Se `unzip` non è installato, lo script lo installerà automaticamente.
+
 ### Esegui l'installer PVE
 
 ```bash
 bash /tmp/veeamreporter/Veeamreporter-main/agents/pve/install.sh
 ```
 
-> **Nota:** Lo script deve essere eseguito come root. Se non sei già root, usa `sudo`. Lo script installerà automaticamente `unzip` e `python3-venv` se mancanti.
+> **Nota:** Lo script deve essere eseguito come root. Su Proxmox VE di solito si è già root, quindi `sudo` non è necessario. Lo script installerà automaticamente `unzip` e `python3-venv` (o `python3.X-venv` per la versione specifica) se mancanti.
 
 L'installer chiede interattivamente:
 
