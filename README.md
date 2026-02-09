@@ -40,18 +40,18 @@ Veeam B&R / PBS Server
 ├── agents/
 │   ├── veeam/                        # Agent Windows
 │   │   ├── VeeamBackupMonitor.ps1    # Script principale di monitoraggio
-│   │   ├── config.json               # Configurazione agent
+│   │   ├── config.example.json        # Template configurazione
 │   │   └── Install-Task.ps1          # Installer scheduled task
 │   ├── pbs/                          # Agent PBS (Linux)
 │   │   ├── pbs_monitor.py            # Script principale di monitoraggio
-│   │   ├── config.yaml               # Configurazione agent
+│   │   ├── config.example.yaml       # Template configurazione
 │   │   ├── requirements.txt          # Dipendenze Python
 │   │   ├── install.sh                # Installer interattivo
 │   │   ├── pbs-monitor.service       # Unit systemd
 │   │   └── pbs-monitor.timer         # Timer systemd (30 min)
 │   └── pve/                          # Agent Proxmox VE (Linux)
 │       ├── pve_monitor.py            # Script principale di monitoraggio
-│       ├── config.yaml               # Configurazione agent
+│       ├── config.example.yaml       # Template configurazione
 │       ├── requirements.txt          # Dipendenze Python
 │       ├── install.sh                # Installer interattivo
 │       ├── pve-monitor.service       # Unit systemd
@@ -107,6 +107,8 @@ Remove-Item "$env:TEMP\Veeamreporter*" -Recurse -Force
 
 In alternativa, scarica lo ZIP manualmente da GitHub e copia il contenuto di `agents\veeam\` in `C:\BackupMonitor\`.
 
+> **Nota:** Il file `config.json` non e incluso nel repository. Alla prima installazione, l'installer lo crea automaticamente dal template `config.example.json`. Gli aggiornamenti successivi non sovrascrivono la configurazione esistente.
+
 ### 2. Installa
 
 Esegui come **Amministratore** (il flag `-ExecutionPolicy Bypass` e necessario perche gli script scaricati da internet non sono firmati):
@@ -123,7 +125,7 @@ L'installer chiede interattivamente:
 - **Server Graylog** - IP o hostname
 - **Porta syslog** (default: 4514)
 
-I dati inseriti vengono salvati automaticamente in `config.json`. Poi l'installer:
+I dati inseriti vengono salvati in `config.json` (creato dal template `config.example.json` se non presente). Poi l'installer:
 
 - Sblocca tutti i file `.ps1` e `.json` (rimuove il flag Zone.Identifier di Windows)
 - Crea un task schedulato `VeeamBackupMonitor` che gira ogni **30 minuti**

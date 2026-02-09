@@ -23,6 +23,18 @@ Write-Host "File sbloccati in '$InstallPath'" -ForegroundColor Cyan
 
 # --- Configurazione ---
 $configPath = Join-Path $InstallPath "config.json"
+$templatePath = Join-Path $InstallPath "config.example.json"
+
+# Se config.json non esiste, crealo dal template
+if (-not (Test-Path $configPath)) {
+    if (Test-Path $templatePath) {
+        Copy-Item $templatePath $configPath
+        Write-Host "Creato config.json dal template" -ForegroundColor Cyan
+    } else {
+        throw "Nessun file di configurazione trovato ($configPath o $templatePath)"
+    }
+}
+
 $config = Get-Content $configPath -Raw | ConvertFrom-Json
 
 # Se il config e gia stato compilato (server syslog diverso dal placeholder), salta la configurazione
