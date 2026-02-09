@@ -21,30 +21,40 @@ Get-ChildItem -Path $InstallPath -Filter "*.ps1" | Unblock-File -ErrorAction Sil
 Get-ChildItem -Path $InstallPath -Filter "*.json" | Unblock-File -ErrorAction SilentlyContinue
 Write-Host "File sbloccati in '$InstallPath'" -ForegroundColor Cyan
 
-# --- Configurazione interattiva ---
-Write-Host "`n=== Configurazione Backup Monitor ===" -ForegroundColor Yellow
-
+# --- Configurazione ---
 $configPath = Join-Path $InstallPath "config.json"
 $config = Get-Content $configPath -Raw | ConvertFrom-Json
 
-$clientCode = Read-Host "Codice cliente (es. CLI001)"
-$clientName = Read-Host "Nome cliente (es. Azienda Srl)"
-$clientSite = Read-Host "Sede (es. sede-principale) [Invio = sede-principale]"
-$syslogServer = Read-Host "Server Graylog - IP o hostname (es. 192.168.1.100)"
-$syslogPort = Read-Host "Porta syslog [Invio = 4514]"
+# Se il config e gia stato compilato (server syslog diverso dal placeholder), salta la configurazione
+$isConfigured = $config.syslog.server -and $config.syslog.server -ne "graylog.example.com"
 
-# Applica valori (con default per campi opzionali)
-$config.client.code = $clientCode
-$config.client.name = $clientName
-$config.client.site = if ($clientSite) { $clientSite } else { "sede-principale" }
-$config.syslog.server = $syslogServer
-$config.syslog.port = if ($syslogPort) { [int]$syslogPort } else { 4514 }
+if ($isConfigured) {
+    Write-Host "`nConfigurazione esistente trovata in '$configPath'" -ForegroundColor Green
+    Write-Host "  Cliente: $($config.client.code) - $($config.client.name)" -ForegroundColor Cyan
+    Write-Host "  Syslog:  $($config.syslog.server):$($config.syslog.port)" -ForegroundColor Cyan
+    Write-Host "  (per riconfigurare, modificare config.json o eliminarlo prima di reinstallare)" -ForegroundColor DarkGray
+} else {
+    Write-Host "`n=== Configurazione Backup Monitor ===" -ForegroundColor Yellow
 
-# Salva config.json
-$config | ConvertTo-Json -Depth 5 | Set-Content -Path $configPath -Encoding UTF8
-Write-Host "`nConfigurazione salvata in '$configPath'" -ForegroundColor Green
-Write-Host "  Cliente: $($config.client.code) - $($config.client.name)" -ForegroundColor Cyan
-Write-Host "  Syslog:  $($config.syslog.server):$($config.syslog.port)" -ForegroundColor Cyan
+    $clientCode = Read-Host "Codice cliente (es. CLI001)"
+    $clientName = Read-Host "Nome cliente (es. Azienda Srl)"
+    $clientSite = Read-Host "Sede (es. sede-principale) [Invio = sede-principale]"
+    $syslogServer = Read-Host "Server Graylog - IP o hostname (es. 192.168.1.100)"
+    $syslogPort = Read-Host "Porta syslog [Invio = 4514]"
+
+    # Applica valori (con default per campi opzionali)
+    $config.client.code = $clientCode
+    $config.client.name = $clientName
+    $config.client.site = if ($clientSite) { $clientSite } else { "sede-principale" }
+    $config.syslog.server = $syslogServer
+    $config.syslog.port = if ($syslogPort) { [int]$syslogPort } else { 4514 }
+
+    # Salva config.json
+    $config | ConvertTo-Json -Depth 5 | Set-Content -Path $configPath -Encoding UTF8
+    Write-Host "`nConfigurazione salvata in '$configPath'" -ForegroundColor Green
+    Write-Host "  Cliente: $($config.client.code) - $($config.client.name)" -ForegroundColor Cyan
+    Write-Host "  Syslog:  $($config.syslog.server):$($config.syslog.port)" -ForegroundColor Cyan
+}
 
 # --- Creazione task schedulato ---
 Write-Host "`n=== Installazione Task Schedulato ===" -ForegroundColor Yellow

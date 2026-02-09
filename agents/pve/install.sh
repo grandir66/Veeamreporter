@@ -52,24 +52,29 @@ python3 -m venv "$INSTALL_DIR/venv"
 "$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt" --quiet
 echo "Dipendenze installate."
 
-# --- Configurazione interattiva ---
-echo ""
-echo "=== Configurazione ==="
-echo ""
-
-read -rp "Codice cliente (es. CLI001): " client_code
-read -rp "Nome cliente (es. Azienda Srl): " client_name
-read -rp "Sede [Invio = sede-principale]: " client_site
-client_site="${client_site:-sede-principale}"
-
-echo ""
-read -rp "Server Graylog - IP o hostname: " syslog_server
-read -rp "Porta syslog [Invio = 4514]: " syslog_port
-syslog_port="${syslog_port:-4514}"
-
-# --- Scrivi config.yaml ---
+# --- Configurazione ---
 mkdir -p "$CONFIG_DIR"
-cat > "$CONFIG_FILE" <<EOF
+
+if [[ -f "$CONFIG_FILE" ]] && ! grep -q "graylog.example.com" "$CONFIG_FILE"; then
+    echo "Configurazione esistente trovata in $CONFIG_FILE"
+    grep -E "^\s+(code|name|server|port):" "$CONFIG_FILE" | head -4
+    echo "  (per riconfigurare, eliminare $CONFIG_FILE prima di reinstallare)"
+else
+    echo ""
+    echo "=== Configurazione ==="
+    echo ""
+
+    read -rp "Codice cliente (es. CLI001): " client_code
+    read -rp "Nome cliente (es. Azienda Srl): " client_name
+    read -rp "Sede [Invio = sede-principale]: " client_site
+    client_site="${client_site:-sede-principale}"
+
+    echo ""
+    read -rp "Server Graylog - IP o hostname: " syslog_server
+    read -rp "Porta syslog [Invio = 4514]: " syslog_port
+    syslog_port="${syslog_port:-4514}"
+
+    cat > "$CONFIG_FILE" <<EOF
 # PVE Backup Monitor - Configurazione
 
 client:
@@ -86,10 +91,11 @@ syslog:
   facility: "local0"
 EOF
 
-echo ""
-echo "Configurazione salvata in $CONFIG_FILE"
-echo "  Cliente: $client_code - $client_name"
-echo "  Syslog:  $syslog_server:$syslog_port"
+    echo ""
+    echo "Configurazione salvata in $CONFIG_FILE"
+    echo "  Cliente: $client_code - $client_name"
+    echo "  Syslog:  $syslog_server:$syslog_port"
+fi
 
 # --- Installa systemd ---
 echo ""
