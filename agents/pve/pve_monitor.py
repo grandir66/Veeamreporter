@@ -401,6 +401,207 @@ def collect_backup_results(node: str, syslog: SyslogSender, client: Dict,
         logger.error(f"Errore raccolta task backup: {e}")
 
 
+def get_latest_backup_info(storage: str, vmid: str, vm_type: str) -> Dict:
+    """Ottiene informazioni sull'ultimo backup di una VM/CT dal repository"""
+    try:
+        # Cerca nel repository PBS
+        content = pvesh_get(f"/nodes/{node}/storage/{storage}/content")
+        
+        # Filtra backup per questa VM/CT
+        vm_backups = []
+        for backup in content:
+            if backup.get("vmid") == int(vmid) and backup.get("content") == "backup":
+                # Verifica che il tipo corrisponda (qemu -> vm, lxc -> ct)
+                if vm_type == "qemu" and backup.get("subtype") == "qemu":
+                    vm_backups.append(backup)
+                elif vm_type == "lxc" and backup.get("subtype") == "lxc":
+                    vm_backups.append(backup)
+        
+        if vm_backups:
+            # Ordina per data (più recente prima)
+            latest = sorted(vm_backups, key=lambda x: x.get("ctime", 0), reverse=True)[0]
+            return {
+                "backup_date": datetime.fromtimestamp(latest.get("ctime", 0), tz=timezone.utc).isoformat() if latest.get("ctime") else None,
+                "backup_size_bytes": latest.get("size", 0),
+                "backup_size_gb": round(latest.get("size", 0) / (1024**3), 2) if latest.get("size", 0) > 0 else None,
+                "backup_volid": latest.get("volid", ""),
+                "verification_state": latest.get("verification", {}).get("state", "unknown") if latest.get("verification") else None
+            }
+    except Exception as e:
+        logger.debug(f"Errore ottenimento info backup per VM {vmid}: {e}")
+    
+    return {}
+
+
+def get_backup_task_info(node: str, vmid: str, lookback_days: int = 7) -> Dict:
+    """Ottiene informazioni sul task di backup più recente per una VM"""
+    try:
+        since = int((datetime.now(timezone.utc) - timedelta(days=lookback_days)).timestamp())
+        tasks = pvesh_get(f"/nodes/{node}/tasks", typefilter="vzdump", since=str(since),
+                          limit="500", source="all")
+        
+        # Cerca task per questa VM nei log (il campo "id" nei task è spesso vuoto, dobbiamo cercare nei log)
+        # Alternativamente, cerca task che corrispondono per tempo approssimativo
+        # Per ora, restituiamo None se non troviamo direttamente
+        # Il matching preciso richiederebbe di parsare i log di ogni task
+        
+        # Cerca nei task completati
+        completed = [t for t in tasks if t.get("status") != "running"]
+        
+        # Prova a ottenere informazioni dal log del task più recente
+        # Nota: questo è un approccio semplificato, potrebbe non essere preciso
+        for task in sorted(completed, key=lambda x: x.get("endtime", 0), reverse=True)[:10]:
+            try:
+                upid = task.get("upid", "")
+                if not upid:
+                    continue
+                
+                # Prova a ottenere il log per vedere se contiene questa VM
+                log_result = subprocess.run(
+                    ["pvesh", "get", f"/nodes/{node}/tasks/{upid}/log", "--output-format", "json"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if log_result.returncode == 0:
+                    import json as json_lib
+                    log_data = json_lib.loads(log_result.stdout)
+                    log_text = "\n".join([line.get("t", "") for line in log_data if isinstance(log_data, list)])
+                    
+                    # Cerca riferimenti alla VM nel log
+                    if f"VM {vmid}" in log_text or f"CT {vmid}" in log_text or f"vmid={vmid}" in log_text:
+                        starttime = task.get("starttime", 0)
+                        endtime = task.get("endtime", 0)
+                        duration = endtime - starttime if endtime and starttime else 0
+                        exitstatus = task.get("exitstatus", "")
+                        
+                        # Determina status
+                        if exitstatus == "OK":
+                            status = "success"
+                        elif "error" in str(exitstatus).lower() or "failed" in str(task.get("status", "")).lower():
+                            status = "failed"
+                        else:
+                            status = "warning"
+                        
+                        return {
+                            "backup_status": status,
+                            "backup_start_time": datetime.fromtimestamp(starttime, tz=timezone.utc).isoformat() if starttime else None,
+                            "backup_end_time": datetime.fromtimestamp(endtime, tz=timezone.utc).isoformat() if endtime else None,
+                            "backup_duration_seconds": duration,
+                            "backup_duration_minutes": round(duration / 60, 1) if duration > 0 else None,
+                            "task_upid": upid
+                        }
+            except:
+                continue
+    except Exception as e:
+        logger.debug(f"Errore ottenimento task backup per VM {vmid}: {e}")
+    
+    return {}
+
+
+def get_latest_backup_info(node: str, storage: str, vmid: str, vm_type: str) -> Dict:
+    """Ottiene informazioni sull'ultimo backup di una VM/CT dal repository PBS"""
+    try:
+        # Cerca nel repository PBS
+        content = pvesh_get(f"/nodes/{node}/storage/{storage}/content")
+        
+        # Filtra backup per questa VM/CT
+        vm_backups = []
+        for backup in content:
+            if backup.get("vmid") == int(vmid) and backup.get("content") == "backup":
+                # Verifica che il tipo corrisponda (qemu -> vm, lxc -> ct)
+                if vm_type == "qemu" and backup.get("subtype") == "qemu":
+                    vm_backups.append(backup)
+                elif vm_type == "lxc" and backup.get("subtype") == "lxc":
+                    vm_backups.append(backup)
+        
+        if vm_backups:
+            # Ordina per data (più recente prima)
+            latest = sorted(vm_backups, key=lambda x: x.get("ctime", 0), reverse=True)[0]
+            return {
+                "backup_date": datetime.fromtimestamp(latest.get("ctime", 0), tz=timezone.utc).isoformat() if latest.get("ctime") else None,
+                "backup_size_bytes": latest.get("size", 0),
+                "backup_size_gb": round(latest.get("size", 0) / (1024**3), 2) if latest.get("size", 0) > 0 else None,
+                "backup_volid": latest.get("volid", ""),
+                "verification_state": latest.get("verification", {}).get("state", "unknown") if latest.get("verification") else None
+            }
+    except Exception as e:
+        logger.debug(f"Errore ottenimento info backup per VM {vmid} da storage {storage}: {e}")
+    
+    return {}
+
+
+def get_backup_task_info(node: str, vmid: str, storage: str, lookback_days: int = 7) -> Dict:
+    """Ottiene informazioni sul task di backup più recente per una VM cercando nei log dei task"""
+    try:
+        since = int((datetime.now(timezone.utc) - timedelta(days=lookback_days)).timestamp())
+        tasks = pvesh_get(f"/nodes/{node}/tasks", typefilter="vzdump", since=str(since),
+                          limit="500", source="all")
+        
+        # Cerca nei task completati, ordinati per data più recente
+        completed = sorted([t for t in tasks if t.get("status") != "running"], 
+                          key=lambda x: x.get("endtime", 0), reverse=True)
+        
+        # Prova a ottenere informazioni dal log del task più recente che potrebbe essere per questa VM
+        for task in completed[:20]:  # Controlla solo i 20 più recenti per performance
+            try:
+                upid = task.get("upid", "")
+                if not upid:
+                    continue
+                
+                # Prova a ottenere il log per vedere se contiene questa VM
+                log_result = subprocess.run(
+                    ["pvesh", "get", f"/nodes/{node}/tasks/{upid}/log", "--output-format", "json"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if log_result.returncode == 0:
+                    import json as json_lib
+                    try:
+                        log_data = json_lib.loads(log_result.stdout)
+                        # Il log può essere una lista di oggetti o una stringa
+                        if isinstance(log_data, list):
+                            log_text = "\n".join([str(line.get("t", "")) for line in log_data])
+                        else:
+                            log_text = str(log_data)
+                        
+                        # Cerca riferimenti alla VM nel log (pattern comuni nei log vzdump)
+                        if (f"VM {vmid}" in log_text or f"CT {vmid}" in log_text or 
+                            f"vmid={vmid}" in log_text or f"Backup of VM {vmid}" in log_text or
+                            f"Backup of CT {vmid}" in log_text):
+                            starttime = task.get("starttime", 0)
+                            endtime = task.get("endtime", 0)
+                            duration = endtime - starttime if endtime and starttime else 0
+                            exitstatus = task.get("exitstatus", "")
+                            task_status = task.get("status", "")
+                            
+                            # Determina status
+                            if exitstatus == "OK" or task_status == "stopped":
+                                status = "success"
+                            elif "error" in str(exitstatus).lower() or "error" in str(task_status).lower() or "failed" in str(task_status).lower():
+                                status = "failed"
+                            else:
+                                status = "warning"
+                            
+                            return {
+                                "backup_status": status,
+                                "backup_start_time": datetime.fromtimestamp(starttime, tz=timezone.utc).isoformat() if starttime else None,
+                                "backup_end_time": datetime.fromtimestamp(endtime, tz=timezone.utc).isoformat() if endtime else None,
+                                "backup_duration_seconds": duration,
+                                "backup_duration_minutes": round(duration / 60, 1) if duration > 0 else None,
+                                "task_upid": upid
+                            }
+                    except:
+                        continue
+            except:
+                continue
+    except Exception as e:
+        logger.debug(f"Errore ottenimento task backup per VM {vmid}: {e}")
+    
+    return {}
+
+
 def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode: bool):
     """Raccoglie informazioni sui job di backup schedulati e le VM/CT che vengono backuppate"""
     logger.info("Raccolta job di backup schedulati...")
@@ -603,12 +804,16 @@ def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode
                 except Exception as e:
                     logger.debug(f"Errore ottenimento lista VM/CT cluster: {e}")
                 
+                # Ottieni storage del job per cercare i backup
+                job_storage = job.get("storage", "")
+                
                 for vmid in vm_ids:
                     # Cerca nella cache delle VM/CT del cluster
                     vm_info = cluster_vms.get(vmid) or cluster_cts.get(vmid)
                     
+                    vm_data = {}
                     if vm_info:
-                        vm_list.append({
+                        vm_data = {
                             "vmid": vmid,
                             "name": vm_info["name"],
                             "type": vm_info["type"],
@@ -618,7 +823,7 @@ def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode
                             "disk_size_gb": round(vm_info.get("maxdisk", 0) / (1024**3), 2) if vm_info.get("maxdisk", 0) > 0 else None,
                             "memory_bytes": vm_info.get("maxmem", 0),
                             "memory_gb": round(vm_info.get("maxmem", 0) / (1024**3), 2) if vm_info.get("maxmem", 0) > 0 else None
-                        })
+                        }
                     else:
                         # Se non trovata nella cache locale, cerca nella lista delle risorse del cluster
                         vm_name = f"VM-{vmid}"
@@ -643,7 +848,7 @@ def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode
                         except Exception as e:
                             logger.debug(f"Errore ricerca VM {vmid} in cluster/resources: {e}")
                         
-                        vm_list.append({
+                        vm_data = {
                             "vmid": vmid,
                             "name": vm_name,
                             "type": vm_type,
@@ -653,7 +858,20 @@ def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode
                             "disk_size_gb": round(vm_disk / (1024**3), 2) if vm_disk > 0 else None,
                             "memory_bytes": vm_mem if vm_mem > 0 else None,
                             "memory_gb": round(vm_mem / (1024**3), 2) if vm_mem > 0 else None
-                        })
+                        }
+                    
+                    # Aggiungi informazioni sul backup dal repository PBS
+                    if job_storage and vm_data.get("type") != "unknown":
+                        backup_info = get_latest_backup_info(node, job_storage, vmid, vm_data.get("type", "qemu"))
+                        if backup_info:
+                            vm_data.update(backup_info)
+                        
+                        # Aggiungi informazioni sul task di backup
+                        task_info = get_backup_task_info(node, vmid, job_storage)
+                        if task_info:
+                            vm_data.update(task_info)
+                    
+                    vm_list.append(vm_data)
                 
                 if vm_list:
                     backup_jobs.append({
