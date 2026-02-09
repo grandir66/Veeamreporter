@@ -302,6 +302,34 @@ systemctl list-timers | grep pve
 rm -rf /tmp/veeamreporter
 ```
 
+### Aggiornamento PVE Agent
+
+Dopo un `git pull` o un nuovo download da GitHub, per aggiornare un'installazione esistente senza riconfigurare:
+
+```bash
+# 1. Scarica l'ultima versione da GitHub
+curl -L -o /tmp/veeamreporter.zip https://github.com/grandir66/Veeamreporter/archive/refs/heads/main.zip
+unzip -o /tmp/veeamreporter.zip -d /tmp/veeamreporter
+rm -f /tmp/veeamreporter.zip
+
+# 2. Copia i file nella cartella di installazione
+cp /tmp/veeamreporter/Veeamreporter-main/agents/pve/pve_monitor.py /opt/pve-monitor/
+cp /tmp/veeamreporter/Veeamreporter-main/agents/pve/requirements.txt /opt/pve-monitor/
+
+# 3. Aggiorna le dipendenze Python (se requirements.txt è cambiato)
+/opt/pve-monitor/venv/bin/pip install -r /opt/pve-monitor/requirements.txt -q
+
+# 4. Pulizia
+rm -rf /tmp/veeamreporter
+```
+
+La configurazione in `/etc/backup-monitor/pve-config.yaml` non viene modificata.
+
+Per verificare l'aggiornamento:
+```bash
+/opt/pve-monitor/venv/bin/python /opt/pve-monitor/pve_monitor.py -c /etc/backup-monitor/pve-config.yaml --test
+```
+
 ---
 
 ## Configurazione Graylog
