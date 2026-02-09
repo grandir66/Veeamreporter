@@ -114,6 +114,16 @@ function Initialize-Veeam {
         }
     }
     Write-Log "Modulo Veeam caricato"
+
+    # Connessione esplicita al server locale (necessario con MFA abilitata in Veeam v12+)
+    try {
+        Disconnect-VBRServer -ErrorAction SilentlyContinue
+        Connect-VBRServer -Server localhost -ErrorAction Stop
+        Write-Log "Connesso al server Veeam locale"
+    }
+    catch {
+        Write-Log "Connessione al server Veeam: $_" -Level Warning
+    }
 }
 
 function Get-VeeamServerStatus {
@@ -312,5 +322,8 @@ try {
 catch {
     Write-Log "ERRORE: $_" -Level Error
     exit 1
+}
+finally {
+    Disconnect-VBRServer -ErrorAction SilentlyContinue
 }
 #endregion
