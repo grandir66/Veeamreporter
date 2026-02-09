@@ -401,6 +401,59 @@ Risultato di un job di backup completato.
 | `objects_success/warning/failed`   | Conteggio per esito                    |
 | `objects`                          | Array dettaglio per ogni VM            |
 | `objects[].error_message`          | Motivo errore (solo se failed/warning) |
+| `objects[].error_details`          | Array log dettagliati errore (solo se failed/warning) |
+| `error_details`                   | Dettagli errori sessione (solo se failed/warning) |
+| `error_details.error_count`       | Numero errori trovati                  |
+| `error_details.summary`            | Riepilogo errore principale            |
+| `error_details.errors[]`           | Array log errori dettagliati           |
+| `error_details.errors[].title`     | Titolo record errore                   |
+| `error_details.errors[].message`   | Messaggio errore completo              |
+| `error_details.errors[].status`   | Status (Error/Warning)                 |
+| `error_details.errors[].time`      | Timestamp errore (UTC)                 |
+
+**Esempio messaggio con errori dettagliati:**
+
+```json
+{
+  "message_type": "VEEAM_JOB_RESULT",
+  "status": "failed",
+  "job_name": "Backup VM Production",
+  "result_message": "Job failed",
+  "error_details": {
+    "error_count": 3,
+    "summary": "Failed to process VM: VM-Prod-01",
+    "errors": [
+      {
+        "title": "Error",
+        "message": "Failed to create snapshot: The operation timed out",
+        "status": "Error",
+        "time": "2026-02-09T10:15:23Z"
+      },
+      {
+        "title": "Error",
+        "message": "VM VM-Prod-01: Connection timeout",
+        "status": "Error",
+        "time": "2026-02-09T10:15:45Z"
+      }
+    ]
+  },
+  "objects": [
+    {
+      "name": "VM-Prod-01",
+      "status": "failed",
+      "error_message": "Failed to create snapshot",
+      "error_details": [
+        {
+          "title": "Error",
+          "message": "Snapshot creation failed: The operation timed out",
+          "status": "Error",
+          "time": "2026-02-09T10:15:23Z"
+        }
+      ]
+    }
+  ]
+}
+```
 
 ### PBS_SERVER_STATUS
 

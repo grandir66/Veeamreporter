@@ -355,14 +355,82 @@ function Get-VeeamJobResults {
                         size_bytes = $task.Progress.ProcessedSize
                         duration_seconds = if ($task.Progress.Duration) { [int]$task.Progress.Duration.TotalSeconds } else { 0 }
                     }
-                    if ($task.Status -ne 'Success' -and $task.Info.Reason) {
-                        $obj.error_message = $task.Info.Reason
+                    # Aggiungi informazioni di errore dettagliate per oggetti falliti/warning
+                    if ($task.Status -ne 'Success') {
+                        if ($task.Info.Reason) {
+                            $obj.error_message = $task.Info.Reason
+                        }
+                        # Prova a ottenere log dettagliati dell'errore dal task
+                        try {
+                            $taskLog = $task.Logger.GetLog() -ErrorAction SilentlyContinue
+                            if ($taskLog -and $taskLog.UpdatedRecords) {
+                                $errorRecords = $taskLog.UpdatedRecords | Where-Object { 
+                                    $_.Title -match "error|failed|warning|exception" -or 
+                                    $_.Status -eq "Error" -or 
+                                    $_.Status -eq "Warning"
+                                } | Select-Object -First 5
+                                if ($errorRecords) {
+                                    $obj.error_details = @($errorRecords | ForEach-Object { 
+                                        @{
+                                            title = $_.Title
+                                            message = $_.Message
+                                            status = $_.Status.ToString()
+                                            time = $_.Time.ToString("yyyy-MM-ddTHH:mm:ssZ")
+                                        }
+                                    })
+                                }
+                            }
+                        }
+                        catch {
+                            # Ignora errori nel recupero log dettagliati
+                        }
                     }
                     $objects += $obj
                 }
 
                 $bottleneck = $session.Progress.BottleneckInfo
                 $bottleneckStr = if ($bottleneck) { $bottleneck.ToString() } else { "None" }
+
+                # Raccogli informazioni dettagliate sugli errori a livello di sessione
+                $errorDetails = $null
+                $errorLogs = @()
+                if ($status -eq "failed" -or $status -eq "warning") {
+                    try {
+                        # Ottieni log dettagliati dalla sessione
+                        $sessionLog = $session.Logger.GetLog() -ErrorAction SilentlyContinue
+                        if ($sessionLog -and $sessionLog.UpdatedRecords) {
+                            # Filtra record di errore/warning
+                            $errorRecords = $sessionLog.UpdatedRecords | Where-Object { 
+                                $_.Status -eq "Error" -or 
+                                $_.Status -eq "Warning" -or
+                                $_.Title -match "error|failed|exception|warning"
+                            } | Select-Object -First 10 | Sort-Object Time -Descending
+                            
+                            if ($errorRecords) {
+                                $errorLogs = @($errorRecords | ForEach-Object {
+                                    @{
+                                        title = $_.Title
+                                        message = $_.Message
+                                        status = $_.Status.ToString()
+                                        time = $_.Time.ToString("yyyy-MM-ddTHH:mm:ssZ")
+                                    }
+                                })
+                            }
+                        }
+                    }
+                    catch {
+                        Write-Log "Errore recupero log dettagliati sessione: $_" -Level Warning
+                    }
+                    
+                    # Se ci sono errori dettagliati, crea un riepilogo
+                    if ($errorLogs.Count -gt 0) {
+                        $errorDetails = @{
+                            error_count = $errorLogs.Count
+                            errors = $errorLogs
+                            summary = if ($session.Info.Reason) { $session.Info.Reason } else { "Errore durante l'esecuzione del job" }
+                        }
+                    }
+                }
 
                 $jobData = @{
                     status = $status
@@ -385,6 +453,11 @@ function Get-VeeamJobResults {
                     objects_warning = ($objects | Where-Object { $_.status -eq "warning" }).Count
                     objects_failed = ($objects | Where-Object { $_.status -eq "failed" }).Count
                     objects = $objects
+                }
+                
+                # Aggiungi dettagli errori solo se presenti
+                if ($errorDetails) {
+                    $jobData.error_details = $errorDetails
                 }
             } else {
                 # Nessuna sessione recente - report stato dal job
