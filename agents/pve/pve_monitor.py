@@ -227,7 +227,7 @@ def collect_storage_status(node: str, syslog: SyslogSender, client: Dict, test_m
 
 def collect_backup_results(node: str, syslog: SyslogSender, client: Dict,
                            lookback_hours: int, test_mode: bool):
-    """Raccoglie e invia risultati task vzdump"""
+    """Raccoglie e invia risultati task vzdump, raggruppati per job con dettagli per ogni VM"""
     logger.info("Raccolta risultati backup vzdump...")
 
     try:
@@ -239,35 +239,162 @@ def collect_backup_results(node: str, syslog: SyslogSender, client: Dict,
         completed = [t for t in tasks if t.get("status") == "stopped"]
         logger.info(f"Trovati {len(completed)} task vzdump completati")
 
+        # Raggruppa task per job (task che iniziano nello stesso momento con lo stesso utente sono probabilmente dello stesso job)
+        jobs_dict = {}
+        
         for task in completed:
             starttime = task.get("starttime", 0)
             endtime = task.get("endtime", 0)
             duration = endtime - starttime if endtime and starttime else 0
-
+            vmid = task.get("id", "")
+            upid = task.get("upid", "")
+            user = task.get("user", "")
             exitstatus = task.get("exitstatus", "")
+            
+            # Determina status
             if exitstatus == "OK":
                 status = "success"
             elif "error" in exitstatus.lower():
                 status = "failed"
             else:
                 status = "warning"
-
-            vmid = task.get("id", "")
-
-            data = {
-                "status": status,
-                "task_id": task.get("upid", ""),
+            
+            # Prova a ottenere informazioni sulla VM/CT
+            vm_name = f"VM-{vmid}"
+            vm_type = "unknown"
+            try:
+                vm_info = pvesh_get(f"/nodes/{node}/qemu/{vmid}")
+                vm_name = vm_info.get("name", f"VM-{vmid}")
+                vm_type = "qemu"
+            except:
+                try:
+                    ct_info = pvesh_get(f"/nodes/{node}/lxc/{vmid}")
+                    vm_name = ct_info.get("name", f"CT-{vmid}")
+                    vm_type = "lxc"
+                except:
+                    pass
+            
+            # Prova a ottenere dimensione backup
+            backup_size_bytes = 0
+            try:
+                # Prova a ottenere informazioni dettagliate dal task
+                task_details = pvesh_get(f"/nodes/{node}/tasks/{upid}")
+                
+                # Cerca informazioni sulla dimensione nei dettagli del task
+                # Potrebbe essere nel campo "size" o simile
+                if "size" in task_details:
+                    backup_size_bytes = int(task_details["size"])
+                
+                # Alternativa: cerca nei log del task
+                if backup_size_bytes == 0:
+                    try:
+                        log_result = subprocess.run(
+                            ["pvesh", "get", f"/nodes/{node}/tasks/{upid}/log"],
+                            capture_output=True,
+                            text=True,
+                            timeout=10
+                        )
+                        if log_result.returncode == 0:
+                            log_lines = log_result.stdout.split('\n')
+                            # Cerca righe che contengono informazioni sulla dimensione
+                            for line in log_lines:
+                                # Cerca pattern come "total bytes read: 1234567890" o "backup size: 1234 GB"
+                                size_match = re.search(r'(\d+)\s*(bytes?|KB|MB|GB)', line, re.IGNORECASE)
+                                if size_match:
+                                    size_val = int(size_match.group(1))
+                                    unit = size_match.group(2).upper()
+                                    if 'GB' in unit:
+                                        backup_size_bytes = size_val * (1024**3)
+                                    elif 'MB' in unit:
+                                        backup_size_bytes = size_val * (1024**2)
+                                    elif 'KB' in unit:
+                                        backup_size_bytes = size_val * 1024
+                                    else:
+                                        backup_size_bytes = size_val
+                                    break
+                    except:
+                        pass
+            except:
+                pass
+            
+            # Crea chiave per raggruppare: user + timestamp arrotondato a 5 minuti
+            # Task dello stesso job iniziano quasi simultaneamente
+            time_key = int(starttime / 300) * 300  # Arrotonda a 5 minuti
+            job_key = f"{user}_{time_key}"
+            
+            if job_key not in jobs_dict:
+                jobs_dict[job_key] = {
+                    "user": user,
+                    "start_time": starttime,
+                    "end_time": endtime,
+                    "vms": [],
+                    "task_ids": []
+                }
+            
+            # Aggiorna end_time se questo task è finito dopo
+            if endtime > jobs_dict[job_key]["end_time"]:
+                jobs_dict[job_key]["end_time"] = endtime
+            
+            # Aggiungi VM al job
+            vm_data = {
                 "vmid": vmid,
+                "name": vm_name,
+                "type": vm_type,
+                "status": status,
+                "exit_status": exitstatus,
                 "start_time": datetime.fromtimestamp(starttime, tz=timezone.utc).isoformat() if starttime else None,
                 "end_time": datetime.fromtimestamp(endtime, tz=timezone.utc).isoformat() if endtime else None,
                 "duration_seconds": duration,
                 "duration_minutes": round(duration / 60, 1),
-                "exit_status": exitstatus,
-                "result_message": exitstatus,
-                "user": task.get("user", ""),
+                "task_id": upid,
+                "size_bytes": backup_size_bytes,
+                "size_gb": round(backup_size_bytes / (1024**3), 2) if backup_size_bytes > 0 else None
             }
-
+            
+            jobs_dict[job_key]["vms"].append(vm_data)
+            jobs_dict[job_key]["task_ids"].append(upid)
+        
+        # Invia un messaggio per ogni job con tutte le VM
+        for job_key, job_data in jobs_dict.items():
+            vms = job_data["vms"]
+            start_time = job_data["start_time"]
+            end_time = job_data["end_time"]
+            job_duration = end_time - start_time if end_time and start_time else 0
+            
+            # Calcola statistiche del job
+            vms_success = sum(1 for v in vms if v["status"] == "success")
+            vms_warning = sum(1 for v in vms if v["status"] == "warning")
+            vms_failed = sum(1 for v in vms if v["status"] == "failed")
+            total_size_bytes = sum(v.get("size_bytes", 0) for v in vms)
+            
+            # Status complessivo del job
+            if vms_failed > 0:
+                job_status = "failed"
+            elif vms_warning > 0:
+                job_status = "warning"
+            else:
+                job_status = "success"
+            
+            data = {
+                "status": job_status,
+                "job_start_time": datetime.fromtimestamp(start_time, tz=timezone.utc).isoformat() if start_time else None,
+                "job_end_time": datetime.fromtimestamp(end_time, tz=timezone.utc).isoformat() if end_time else None,
+                "job_duration_seconds": job_duration,
+                "job_duration_minutes": round(job_duration / 60, 1),
+                "user": job_data["user"],
+                "vm_count": len(vms),
+                "vms_success": vms_success,
+                "vms_warning": vms_warning,
+                "vms_failed": vms_failed,
+                "total_size_bytes": total_size_bytes if total_size_bytes > 0 else None,
+                "total_size_gb": round(total_size_bytes / (1024**3), 2) if total_size_bytes > 0 else None,
+                "vms": vms,
+                "task_ids": job_data["task_ids"]
+            }
+            
             syslog.send("PVE_BACKUP_RESULT", data, client, test_mode)
+        
+        logger.info(f"Processati {len(jobs_dict)} job di backup con {sum(len(j['vms']) for j in jobs_dict.values())} VM totali")
 
     except Exception as e:
         logger.error(f"Errore raccolta task backup: {e}")
@@ -546,27 +673,89 @@ def collect_daily_report(node: str, syslog: SyslogSender, client: Dict,
 
         completed = [t for t in tasks if t.get("status") == "stopped"]
 
-        jobs = []
+        # Raggruppa per job (come nella funzione collect_backup_results)
+        jobs_dict = {}
+        
         for task in completed:
             starttime = task.get("starttime", 0)
             endtime = task.get("endtime", 0)
             duration = endtime - starttime if endtime and starttime else 0
-
+            vmid = task.get("id", "")
+            upid = task.get("upid", "")
+            user = task.get("user", "")
             exitstatus = task.get("exitstatus", "")
+            
             if exitstatus == "OK":
                 status = "success"
             elif "error" in exitstatus.lower():
                 status = "failed"
             else:
                 status = "warning"
-
-            jobs.append({
-                "vmid": task.get("id", ""),
+            
+            # Prova a ottenere nome VM
+            vm_name = f"VM-{vmid}"
+            try:
+                vm_info = pvesh_get(f"/nodes/{node}/qemu/{vmid}")
+                vm_name = vm_info.get("name", f"VM-{vmid}")
+            except:
+                try:
+                    ct_info = pvesh_get(f"/nodes/{node}/lxc/{vmid}")
+                    vm_name = ct_info.get("name", f"CT-{vmid}")
+                except:
+                    pass
+            
+            time_key = int(starttime / 300) * 300
+            job_key = f"{user}_{time_key}"
+            
+            if job_key not in jobs_dict:
+                jobs_dict[job_key] = {
+                    "start_time": starttime,
+                    "end_time": endtime,
+                    "vms": []
+                }
+            
+            if endtime > jobs_dict[job_key]["end_time"]:
+                jobs_dict[job_key]["end_time"] = endtime
+            
+            jobs_dict[job_key]["vms"].append({
+                "vmid": vmid,
+                "name": vm_name,
                 "status": status,
                 "start_time": datetime.fromtimestamp(starttime, tz=timezone.utc).isoformat() if starttime else None,
                 "end_time": datetime.fromtimestamp(endtime, tz=timezone.utc).isoformat() if endtime else None,
                 "duration_minutes": round(duration / 60, 1),
                 "exit_status": exitstatus,
+            })
+        
+        # Converti in formato jobs per il report
+        jobs = []
+        for job_key, job_data in jobs_dict.items():
+            vms = job_data["vms"]
+            start_time = job_data["start_time"]
+            end_time = job_data["end_time"]
+            job_duration = end_time - start_time if end_time and start_time else 0
+            
+            vms_success = sum(1 for v in vms if v["status"] == "success")
+            vms_warning = sum(1 for v in vms if v["status"] == "warning")
+            vms_failed = sum(1 for v in vms if v["status"] == "failed")
+            
+            if vms_failed > 0:
+                job_status = "failed"
+            elif vms_warning > 0:
+                job_status = "warning"
+            else:
+                job_status = "success"
+            
+            jobs.append({
+                "job_start_time": datetime.fromtimestamp(start_time, tz=timezone.utc).isoformat() if start_time else None,
+                "job_end_time": datetime.fromtimestamp(end_time, tz=timezone.utc).isoformat() if end_time else None,
+                "job_duration_minutes": round(job_duration / 60, 1),
+                "status": job_status,
+                "vm_count": len(vms),
+                "vms_success": vms_success,
+                "vms_warning": vms_warning,
+                "vms_failed": vms_failed,
+                "vms": vms
             })
 
         success_count = sum(1 for j in jobs if j["status"] == "success")

@@ -537,17 +537,27 @@ Spazio degli storage Proxmox VE (local, NFS, CIFS, PBS backend, etc.).
 
 ### PVE_BACKUP_RESULT
 
-Risultato di un task vzdump completato.
+Risultato di un job di backup vzdump completato, raggruppato con tutte le VM incluse nel job.
 
 | Campo                        | Descrizione                            |
 | ---------------------------- | -------------------------------------- |
-| `task_id`                    | UPID del task                          |
-| `vmid`                       | ID della VM/CT                         |
-| `start_time` / `end_time`    | Inizio e fine (UTC)                    |
-| `duration_minutes`           | Durata in minuti                       |
-| `exit_status`                | Esito task (OK, errore, etc.)          |
-| `result_message`             | Messaggio di risultato                 |
-| `user`                       | Utente che ha eseguito il task         |
+| `job_start_time` / `job_end_time` | Inizio e fine del job completo (UTC) |
+| `job_duration_minutes`       | Durata totale del job in minuti        |
+| `user`                       | Utente che ha eseguito il job          |
+| `vm_count`                   | Numero totale VM/CT nel job            |
+| `vms_success` / `vms_warning` / `vms_failed` | Conteggio VM per esito |
+| `total_size_bytes` / `total_size_gb` | Dimensione totale backup (se disponibile) |
+| `vms`                        | Array dettaglio per ogni VM/CT         |
+| `vms[].vmid`                 | ID della VM/CT                         |
+| `vms[].name`                 | Nome della VM/CT                       |
+| `vms[].type`                 | Tipo (`qemu` o `lxc`)                  |
+| `vms[].status`               | Esito singola VM (success/warning/failed) |
+| `vms[].exit_status`          | Esito task (OK, errore, etc.)          |
+| `vms[].start_time` / `vms[].end_time` | Inizio e fine backup VM (UTC) |
+| `vms[].duration_minutes`     | Durata backup VM in minuti             |
+| `vms[].size_bytes` / `vms[].size_gb` | Dimensione backup VM (se disponibile) |
+| `vms[].task_id`              | UPID del task vzdump per questa VM     |
+| `task_ids`                   | Array di tutti gli UPID del job        |
 
 ### PVE_BACKUP_JOB
 
@@ -645,24 +655,31 @@ Report giornaliero completo di Proxmox VE. Inviato una volta al giorno alle 07:0
 - **PVE_STORAGE_STATUS** - Stato di tutti gli storage
 - **PVE_SERVICE_STATUS** - Stato dei servizi systemd importanti
 - **PVE_BACKUP_COVERAGE** - VM/CT senza backup schedulato
-- **PVE_DAILY_REPORT** - Riepilogo di tutti i task vzdump nelle ultime 24 ore
+- **PVE_DAILY_REPORT** - Riepilogo di tutti i job vzdump nelle ultime 24 ore
 
-Riepilogo giornaliero di tutti i task vzdump PVE nelle ultime 24 ore:
+Riepilogo giornaliero di tutti i job vzdump PVE nelle ultime 24 ore (raggruppati per job con dettagli per ogni VM):
 
 | Campo                              | Descrizione                            |
 | ---------------------------------- | -------------------------------------- |
 | `report_date`                      | Data del report (YYYY-MM-DD)           |
 | `lookback_hours`                   | Ore di lookback (default 24)           |
-| `jobs_total`                       | Numero totale task eseguiti            |
-| `jobs_success`                     | Task completati con successo           |
-| `jobs_warning`                     | Task con warning                       |
-| `jobs_failed`                      | Task falliti                           |
-| `jobs`                             | Array dettaglio per ogni task          |
-| `jobs[].vmid`                      | ID della VM/CT                         |
-| `jobs[].status`                    | Esito (success/warning/failed)         |
-| `jobs[].start_time` / `end_time`   | Inizio e fine (UTC)                    |
-| `jobs[].duration_minutes`          | Durata in minuti                       |
-| `jobs[].exit_status`               | Esito task (OK, errore, etc.)          |
+| `jobs_total`                       | Numero totale job eseguiti             |
+| `jobs_success`                     | Job completati con successo            |
+| `jobs_warning`                     | Job con warning                        |
+| `jobs_failed`                      | Job falliti                            |
+| `jobs`                             | Array dettaglio per ogni job           |
+| `jobs[].job_start_time` / `jobs[].job_end_time` | Inizio e fine del job completo (UTC) |
+| `jobs[].job_duration_minutes`      | Durata totale del job in minuti        |
+| `jobs[].status`                    | Esito complessivo (success/warning/failed) |
+| `jobs[].vm_count`                  | Numero VM/CT nel job                   |
+| `jobs[].vms_success` / `jobs[].vms_warning` / `jobs[].vms_failed` | Conteggio VM per esito |
+| `jobs[].vms`                       | Array dettaglio per ogni VM/CT         |
+| `jobs[].vms[].vmid`                | ID della VM/CT                         |
+| `jobs[].vms[].name`                | Nome della VM/CT                       |
+| `jobs[].vms[].status`              | Esito singola VM (success/warning/failed) |
+| `jobs[].vms[].start_time` / `jobs[].vms[].end_time` | Inizio e fine backup VM (UTC) |
+| `jobs[].vms[].duration_minutes`   | Durata backup VM in minuti             |
+| `jobs[].vms[].exit_status`        | Esito task (OK, errore, etc.)          |
 
 | Campo                              | Descrizione                            |
 | ---------------------------------- | -------------------------------------- |
