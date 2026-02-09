@@ -408,16 +408,54 @@ def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode
         backup_jobs = []
         
         # Ottieni i job vzdump schedulati dal cluster (endpoint corretto: /cluster/backup)
+        # Se l'API non restituisce le VM, prova a leggere direttamente il file di configurazione
+        cluster_jobs = []
+        
         try:
             cluster_jobs = pvesh_get("/cluster/backup")
-            logger.info(f"Trovati {len(cluster_jobs)} job di backup nel cluster")
-            
-            for job in cluster_jobs:
+            logger.info(f"Trovati {len(cluster_jobs)} job di backup nel cluster via API")
+        except Exception as e:
+            logger.warning(f"Errore lettura API /cluster/backup: {e}")
+        
+        # Se l'API non ha restituito job o le VM sono vuote, prova a leggere il file di configurazione
+        if not cluster_jobs or all(not job.get("vms") and not job.get("all") for job in cluster_jobs):
+            logger.info("Tentativo lettura diretta file di configurazione /etc/pve/jobs.cfg")
+            try:
+                with open("/etc/pve/jobs.cfg", "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        # Parse formato jobs.cfg: backup:backup-xxx:vms=100,101,102:storage=xxx:schedule=xxx
+                        if line.startswith("backup:"):
+                            parts = line.split(":")
+                            if len(parts) >= 2:
+                                job_id = parts[1]
+                                job_data = {"id": job_id}
+                                for part in parts[2:]:
+                                    if "=" in part:
+                                        key, value = part.split("=", 1)
+                                        job_data[key] = value
+                                cluster_jobs.append(job_data)
+                logger.info(f"Letti {len(cluster_jobs)} job da /etc/pve/jobs.cfg")
+            except Exception as e:
+                logger.warning(f"Errore lettura /etc/pve/jobs.cfg: {e}")
+        
+        for job in cluster_jobs:
                 job_id = job.get("id", "")
                 if not job_id:
                     continue
                 
                 try:
+                    # Prova a ottenere dettagli completi del job tramite API
+                    try:
+                        job_details = pvesh_get(f"/cluster/backup/{job_id}")
+                        # Merge dettagli con dati base
+                        job.update(job_details)
+                        logger.debug(f"Job {job_id} dettagli completi: {json.dumps(job, indent=2, default=str)}")
+                    except Exception as e:
+                        logger.debug(f"Impossibile ottenere dettagli job {job_id}: {e}")
+                    
                     # Log struttura completa del job per debug
                     logger.debug(f"Job {job_id} completo: {json.dumps(job, indent=2, default=str)}")
                     
