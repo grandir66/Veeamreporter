@@ -4,7 +4,7 @@
 # Non modifica la configurazione in /etc/backup-monitor/pve-config.yaml
 # Eseguire come root.
 #
-# Uso: sudo bash update.sh
+# Uso: bash update.sh   (come root su Proxmox VE)
 
 set -euo pipefail
 
@@ -13,7 +13,7 @@ TMP_DIR="/tmp/veeamreporter-update"
 ZIP_URL="https://github.com/grandir66/Veeamreporter/archive/refs/heads/main.zip"
 
 if [[ $EUID -ne 0 ]]; then
-    echo "Errore: eseguire come root (sudo bash update.sh)"
+    echo "Errore: eseguire come root"
     exit 1
 fi
 

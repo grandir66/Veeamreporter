@@ -305,20 +305,20 @@ rm -rf /tmp/veeamreporter
 
 ### Aggiornamento PVE Agent
 
-Per aggiornare un'installazione esistente senza riconfigurare. **Eseguire come root** sul server Proxmox VE.
+Per aggiornare un'installazione esistente senza riconfigurare. Eseguire come root sul server Proxmox VE.
 
 **Metodo 1 - Script di update (consigliato):**
 
 ```bash
 curl -sL -o /tmp/update-pve-monitor.sh https://raw.githubusercontent.com/grandir66/Veeamreporter/main/agents/pve/update.sh
-sudo bash /tmp/update-pve-monitor.sh
+bash /tmp/update-pve-monitor.sh
 rm -f /tmp/update-pve-monitor.sh
 ```
 
 **Metodo 2 - Comandi manuali:**
 
 ```bash
-# Scarica e estrai (eseguire come root)
+# Scarica e estrai (come root)
 curl -L -o /tmp/veeamreporter.zip https://github.com/grandir66/Veeamreporter/archive/refs/heads/main.zip
 unzip -o /tmp/veeamreporter.zip -d /tmp/veeamreporter
 rm -f /tmp/veeamreporter.zip
