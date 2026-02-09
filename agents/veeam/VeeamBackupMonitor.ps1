@@ -362,7 +362,7 @@ function Get-VeeamJobResults {
                         }
                         # Prova a ottenere log dettagliati dell'errore dal task
                         try {
-                            $taskLog = $task.Logger.GetLog() -ErrorAction SilentlyContinue
+                            $taskLog = $task.Logger.GetLog()
                             if ($taskLog -and $taskLog.UpdatedRecords) {
                                 $errorRecords = $taskLog.UpdatedRecords | Where-Object { 
                                     $_.Title -match "error|failed|warning|exception" -or 
@@ -397,7 +397,7 @@ function Get-VeeamJobResults {
                 if ($status -eq "failed" -or $status -eq "warning") {
                     try {
                         # Ottieni log dettagliati dalla sessione
-                        $sessionLog = $session.Logger.GetLog() -ErrorAction SilentlyContinue
+                        $sessionLog = $session.Logger.GetLog()
                         if ($sessionLog -and $sessionLog.UpdatedRecords) {
                             # Filtra record di errore/warning
                             $errorRecords = $sessionLog.UpdatedRecords | Where-Object { 
