@@ -290,24 +290,46 @@ function Get-VeeamJobResults {
     try {
         $lookbackHours = $Script:Config.veeam.lookback_hours
         $cutoffTime = (Get-Date).AddHours(-$lookbackHours)
+        Write-Log "Finestra: ultime ${lookbackHours}h (dal $($cutoffTime.ToString('yyyy-MM-dd HH:mm')))"
 
-        # Carica tutti i job
+        # Carica tutti i job (backup + replica + qualsiasi tipo)
         $jobs = Get-VBRJob -WarningAction SilentlyContinue
-        Write-Log "Trovati $($jobs.Count) job"
+        Write-Log "Trovati $($jobs.Count) job: $(($jobs | ForEach-Object { "$($_.Name)[$($_.JobType)]" }) -join ', ')"
 
         # Carica TUTTE le sessioni recenti UNA SOLA volta (evita N query al DB)
         Write-Log "Caricamento sessioni recenti..."
-        $allSessions = Get-VBRBackupSession | Where-Object {
+        $allSessions = @(Get-VBRBackupSession | Where-Object {
             $_.EndTime -gt $cutoffTime -and $_.EndTime -ne $null
+        })
+
+        # Includi anche sessioni di replica se disponibili
+        try {
+            $replicaSessions = @(Get-VBRReplicaSession -ErrorAction Stop | Where-Object {
+                $_.EndTime -gt $cutoffTime -and $_.EndTime -ne $null
+            })
+            if ($replicaSessions.Count -gt 0) {
+                $allSessions += $replicaSessions
+                Write-Log "Aggiunte $($replicaSessions.Count) sessioni replica"
+            }
         }
+        catch {
+            # Get-VBRReplicaSession non disponibile o sessioni gia incluse in Get-VBRBackupSession
+        }
+
         Write-Log "Trovate $($allSessions.Count) sessioni nelle ultime ${lookbackHours}h"
+        foreach ($s in $allSessions) {
+            Write-Log "  - $($s.JobName): End=$($s.EndTime.ToString('dd/MM HH:mm')) Result=$($s.Result)"
+        }
 
         foreach ($job in $jobs) {
             # Filtra in memoria (veloce)
             $session = $allSessions | Where-Object { $_.JobId -eq $job.Id } |
                 Sort-Object EndTime -Descending | Select-Object -First 1
 
-            if (-not $session) { continue }
+            if (-not $session) {
+                Write-Log "Job '$($job.Name)' ($($job.JobType)): nessuna sessione completata nelle ultime ${lookbackHours}h"
+                continue
+            }
 
             $status = switch ($session.Result.ToString()) {
                 "Success" { "success" }
@@ -381,9 +403,15 @@ function Get-VeeamDailyReport {
 
     # Carica TUTTE le sessioni recenti UNA SOLA volta
     Write-Log "Caricamento sessioni per report..."
-    $allSessions = Get-VBRBackupSession | Where-Object {
+    $allSessions = @(Get-VBRBackupSession | Where-Object {
         $_.EndTime -gt $cutoffTime -and $_.EndTime -ne $null
-    }
+    })
+    try {
+        $replicaSessions = @(Get-VBRReplicaSession -ErrorAction Stop | Where-Object {
+            $_.EndTime -gt $cutoffTime -and $_.EndTime -ne $null
+        })
+        if ($replicaSessions.Count -gt 0) { $allSessions += $replicaSessions }
+    } catch {}
     Write-Log "Sessioni trovate: $($allSessions.Count)"
 
     $allJobResults = @()
