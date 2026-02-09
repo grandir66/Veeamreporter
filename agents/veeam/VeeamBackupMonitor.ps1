@@ -357,13 +357,14 @@ function Get-VeeamJobResults {
                     }
                     # Aggiungi informazioni di errore dettagliate per oggetti falliti/warning
                     if ($task.Status -ne 'Success') {
-                        if ($task.Info.Reason) {
+                        if ($task.Info -and $task.Info.Reason) {
                             $obj.error_message = $task.Info.Reason
                         }
                         # Prova a ottenere log dettagliati dell'errore dal task
                         try {
-                            $taskLog = $task.Logger.GetLog()
-                            if ($taskLog -and $taskLog.UpdatedRecords) {
+                            if ($task.Logger) {
+                                $taskLog = $task.Logger.GetLog()
+                                if ($taskLog -and $taskLog.UpdatedRecords) {
                                 $errorRecords = $taskLog.UpdatedRecords | Where-Object { 
                                     $_.Title -match "error|failed|warning|exception" -or 
                                     $_.Status -eq "Error" -or 
@@ -380,6 +381,7 @@ function Get-VeeamJobResults {
                                     })
                                 }
                             }
+                            }
                         }
                         catch {
                             # Ignora errori nel recupero log dettagliati
@@ -388,17 +390,35 @@ function Get-VeeamJobResults {
                     $objects += $obj
                 }
 
-                $bottleneck = $session.Progress.BottleneckInfo
-                $bottleneckStr = if ($bottleneck) { $bottleneck.ToString() } else { "None" }
+                # Gestisci bottleneck - estrai valore invece del tipo
+                $bottleneckStr = "None"
+                try {
+                    if ($session.Progress -and $session.Progress.BottleneckInfo) {
+                        $bottleneck = $session.Progress.BottleneckInfo
+                        # Prova a ottenere il valore effettivo invece del tipo
+                        if ($bottleneck -is [string]) {
+                            $bottleneckStr = $bottleneck
+                        } elseif ($bottleneck.ToString() -ne $bottleneck.GetType().FullName) {
+                            $bottleneckStr = $bottleneck.ToString()
+                        } else {
+                            # Se ToString() restituisce il tipo, prova altre proprietà
+                            $bottleneckStr = if ($bottleneck.Name) { $bottleneck.Name } else { "Unknown" }
+                        }
+                    }
+                }
+                catch {
+                    $bottleneckStr = "None"
+                }
 
                 # Raccogli informazioni dettagliate sugli errori a livello di sessione
                 $errorDetails = $null
                 $errorLogs = @()
                 if ($status -eq "failed" -or $status -eq "warning") {
                     try {
-                        # Ottieni log dettagliati dalla sessione
-                        $sessionLog = $session.Logger.GetLog()
-                        if ($sessionLog -and $sessionLog.UpdatedRecords) {
+                        # Verifica che Logger esista prima di chiamare GetLog()
+                        if ($session.Logger) {
+                            $sessionLog = $session.Logger.GetLog()
+                            if ($sessionLog -and $sessionLog.UpdatedRecords) {
                             # Filtra record di errore/warning
                             $errorRecords = $sessionLog.UpdatedRecords | Where-Object { 
                                 $_.Status -eq "Error" -or 
@@ -417,6 +437,7 @@ function Get-VeeamJobResults {
                                 })
                             }
                         }
+                        }
                     }
                     catch {
                         Write-Log "Errore recupero log dettagliati sessione: $_" -Level Warning
@@ -424,10 +445,14 @@ function Get-VeeamJobResults {
                     
                     # Se ci sono errori dettagliati, crea un riepilogo
                     if ($errorLogs.Count -gt 0) {
+                        $summaryMsg = "Errore durante l'esecuzione del job"
+                        if ($session.Info -and $session.Info.Reason) {
+                            $summaryMsg = $session.Info.Reason
+                        }
                         $errorDetails = @{
                             error_count = $errorLogs.Count
                             errors = $errorLogs
-                            summary = if ($session.Info.Reason) { $session.Info.Reason } else { "Errore durante l'esecuzione del job" }
+                            summary = $summaryMsg
                         }
                     }
                 }
@@ -441,7 +466,7 @@ function Get-VeeamJobResults {
                     end_time = $session.EndTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
                     duration_seconds = $duration
                     duration_minutes = [math]::Round($duration / 60, 1)
-                    result_message = $session.Info.Reason
+                    result_message = if ($session.Info -and $session.Info.Reason) { $session.Info.Reason } else { "" }
                     bottleneck = $bottleneckStr
                     is_retry = $session.IsRetryMode
                     data_size_bytes = $session.Progress.ProcessedSize
