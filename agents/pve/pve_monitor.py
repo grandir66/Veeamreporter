@@ -576,8 +576,8 @@ def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode
                 logger.debug(f"Errore elaborazione job {job_id}: {e}")
                 continue
         
-        except Exception as e:
-            logger.warning(f"Errore lettura job backup dal cluster: {e}")
+    except Exception as e:
+        logger.warning(f"Errore lettura job backup dal cluster: {e}")
         
         # Invia un messaggio per ogni job di backup trovato
         for job in backup_jobs:
