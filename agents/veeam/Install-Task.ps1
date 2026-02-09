@@ -51,7 +51,9 @@ if ($isConfigured) {
     $clientCode = Read-Host "Codice cliente (es. CLI001)"
     $clientName = Read-Host "Nome cliente (es. Azienda Srl)"
     $clientSite = Read-Host "Sede (es. sede-principale) [Invio = sede-principale]"
-    $syslogServer = Read-Host "Server Graylog - IP o hostname (es. 192.168.1.100)"
+    $syslogServerDefault = "syslog.domarc.it"
+    $syslogServerInput = Read-Host "Server Graylog - IP o hostname [Invio = $syslogServerDefault]"
+    $syslogServer = if ($syslogServerInput) { $syslogServerInput } else { $syslogServerDefault }
     $syslogPort = Read-Host "Porta syslog [Invio = 4514]"
 
     # Applica valori (con default per campi opzionali)

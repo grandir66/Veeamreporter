@@ -171,7 +171,8 @@ else
     client_site="${client_site:-sede-principale}"
 
     echo ""
-    read -rp "Server Graylog - IP o hostname: " syslog_server
+    read -rp "Server Graylog - IP o hostname [Invio = syslog.domarc.it]: " syslog_server
+    syslog_server="${syslog_server:-syslog.domarc.it}"
     read -rp "Porta syslog [Invio = 4514]: " syslog_port
     syslog_port="${syslog_port:-4514}"
 
