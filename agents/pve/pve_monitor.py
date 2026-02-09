@@ -302,11 +302,71 @@ def collect_backup_coverage(syslog: SyslogSender, client: Dict, test_mode: bool)
         logger.error(f"Errore verifica copertura backup: {e}")
 
 
+def collect_daily_report(node: str, syslog: SyslogSender, client: Dict,
+                         lookback_hours: int, test_mode: bool):
+    """Genera report giornaliero con riepilogo di tutti i task vzdump"""
+    logger.info("Generazione report giornaliero...")
+
+    try:
+        since = int((datetime.now(timezone.utc) - timedelta(hours=lookback_hours)).timestamp())
+        tasks = pvesh_get(f"/nodes/{node}/tasks", typefilter="vzdump", since=str(since),
+                          limit="500", source="all")
+
+        completed = [t for t in tasks if t.get("status") == "stopped"]
+
+        jobs = []
+        for task in completed:
+            starttime = task.get("starttime", 0)
+            endtime = task.get("endtime", 0)
+            duration = endtime - starttime if endtime and starttime else 0
+
+            exitstatus = task.get("exitstatus", "")
+            if exitstatus == "OK":
+                status = "success"
+            elif "error" in exitstatus.lower():
+                status = "failed"
+            else:
+                status = "warning"
+
+            jobs.append({
+                "vmid": task.get("id", ""),
+                "status": status,
+                "start_time": datetime.fromtimestamp(starttime, tz=timezone.utc).isoformat() if starttime else None,
+                "end_time": datetime.fromtimestamp(endtime, tz=timezone.utc).isoformat() if endtime else None,
+                "duration_minutes": round(duration / 60, 1),
+                "exit_status": exitstatus,
+            })
+
+        success_count = sum(1 for j in jobs if j["status"] == "success")
+        warning_count = sum(1 for j in jobs if j["status"] == "warning")
+        failed_count = sum(1 for j in jobs if j["status"] == "failed")
+
+        overall = "failed" if failed_count > 0 else "warning" if warning_count > 0 else "success"
+
+        data = {
+            "status": overall,
+            "report_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            "lookback_hours": lookback_hours,
+            "jobs_total": len(jobs),
+            "jobs_success": success_count,
+            "jobs_warning": warning_count,
+            "jobs_failed": failed_count,
+            "jobs": jobs,
+        }
+
+        syslog.send("PVE_DAILY_REPORT", data, client, test_mode)
+        logger.info(f"Report giornaliero: {len(jobs)} task ({success_count} ok, {warning_count} warning, {failed_count} failed)")
+
+    except Exception as e:
+        logger.error(f"Errore generazione report giornaliero: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="PVE Backup Monitor - Syslog sender")
     parser.add_argument("-c", "--config", default="/etc/backup-monitor/pve-config.yaml",
                         help="Path al file di configurazione")
     parser.add_argument("--test", action="store_true", help="Modalita test (stampa syslog)")
+    parser.add_argument("--daily-report", action="store_true", help="Invia report giornaliero")
     args = parser.parse_args()
 
     # Carica configurazione
@@ -329,10 +389,13 @@ def main():
     lookback = config.get("pve", {}).get("lookback_hours", 24)
 
     # Raccogli e invia dati
-    collect_node_status(node, syslog, client, args.test)
-    collect_storage_status(node, syslog, client, args.test)
-    collect_backup_results(node, syslog, client, lookback, args.test)
-    collect_backup_coverage(syslog, client, args.test)
+    if args.daily_report:
+        collect_daily_report(node, syslog, client, lookback, args.test)
+    else:
+        collect_node_status(node, syslog, client, args.test)
+        collect_storage_status(node, syslog, client, args.test)
+        collect_backup_results(node, syslog, client, lookback, args.test)
+        collect_backup_coverage(syslog, client, args.test)
 
     logger.info("=== Completato ===")
 

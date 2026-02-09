@@ -248,11 +248,73 @@ def collect_backup_tasks(pbs: PBSClient, syslog: SyslogSender, client: Dict,
         logger.error(f"Errore raccolta task: {e}")
 
 
+def collect_daily_report(pbs: PBSClient, syslog: SyslogSender, client: Dict,
+                         lookback_hours: int, test_mode: bool):
+    """Genera report giornaliero con riepilogo di tutti i task"""
+    logger.info("Generazione report giornaliero...")
+
+    try:
+        since = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+        tasks = pbs.get_tasks(since=since)
+
+        backup_tasks = [
+            t for t in tasks
+            if t.get("worker_type", "").startswith("backup")
+            and t.get("endtime")
+        ]
+
+        jobs = []
+        for task in backup_tasks:
+            starttime = task.get("starttime", 0)
+            endtime = task.get("endtime", 0)
+            duration = endtime - starttime if endtime and starttime else 0
+
+            task_status = task.get("status", "")
+            status = "success" if task_status == "OK" else "failed" if "error" in task_status.lower() else "warning"
+
+            worker_id = task.get("worker_id", "")
+            parts = worker_id.split(":") if ":" in worker_id else [worker_id]
+
+            jobs.append({
+                "backup_id": parts[1] if len(parts) > 1 else worker_id,
+                "datastore": parts[0] if parts else "",
+                "status": status,
+                "start_time": datetime.fromtimestamp(starttime, tz=timezone.utc).isoformat() if starttime else None,
+                "end_time": datetime.fromtimestamp(endtime, tz=timezone.utc).isoformat() if endtime else None,
+                "duration_minutes": round(duration / 60, 1),
+                "result_message": task_status,
+            })
+
+        success_count = sum(1 for j in jobs if j["status"] == "success")
+        warning_count = sum(1 for j in jobs if j["status"] == "warning")
+        failed_count = sum(1 for j in jobs if j["status"] == "failed")
+
+        overall = "failed" if failed_count > 0 else "warning" if warning_count > 0 else "success"
+
+        data = {
+            "status": overall,
+            "report_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            "lookback_hours": lookback_hours,
+            "jobs_total": len(jobs),
+            "jobs_success": success_count,
+            "jobs_warning": warning_count,
+            "jobs_failed": failed_count,
+            "jobs": jobs,
+        }
+
+        syslog.send("PBS_DAILY_REPORT", data, client, test_mode)
+        logger.info(f"Report giornaliero: {len(jobs)} task ({success_count} ok, {warning_count} warning, {failed_count} failed)")
+
+    except Exception as e:
+        logger.error(f"Errore generazione report giornaliero: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="PBS Backup Monitor - Syslog sender")
     parser.add_argument("-c", "--config", default="/etc/backup-monitor/pbs-config.yaml",
                         help="Path al file di configurazione")
-    parser.add_argument("--test", action="store_true", help="Modalità test (stampa syslog)")
+    parser.add_argument("--test", action="store_true", help="Modalita test (stampa syslog)")
+    parser.add_argument("--daily-report", action="store_true", help="Invia report giornaliero")
     args = parser.parse_args()
 
     # Carica configurazione
@@ -283,9 +345,12 @@ def main():
     lookback = pbs_cfg.get("lookback_hours", 24)
 
     # Raccogli e invia dati
-    collect_server_status(pbs, syslog, client, args.test)
-    collect_datastore_status(pbs, syslog, client, args.test)
-    collect_backup_tasks(pbs, syslog, client, lookback, args.test)
+    if args.daily_report:
+        collect_daily_report(pbs, syslog, client, lookback, args.test)
+    else:
+        collect_server_status(pbs, syslog, client, args.test)
+        collect_datastore_status(pbs, syslog, client, args.test)
+        collect_backup_tasks(pbs, syslog, client, lookback, args.test)
 
     logger.info("=== Completato ===")
 

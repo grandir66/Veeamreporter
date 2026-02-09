@@ -31,7 +31,7 @@ Veeam B&R / PBS Server
 
 - **Protocollo:** Syslog RFC 5424 su UDP
 - **Porta:** 4514 (configurabile)
-- **Frequenza:** Ogni 30 minuti (scheduled task Windows / systemd timer Linux)
+- **Frequenza:** Ogni 30 minuti (monitoraggio) + report giornaliero alle 07:00
 - **Versione:** 2.0.0
 
 ## Struttura Progetto
@@ -336,14 +336,22 @@ Ogni messaggio contiene campi comuni + campi specifici per tipo.
 
 Stato del server Veeam (CPU, memoria, uptime).
 
-| Campo              | Descrizione                        |
-| ------------------ | ---------------------------------- |
-| `server_name`      | Nome server                        |
-| `veeam_version`    | Versione Veeam installata          |
-| `uptime_hours`     | Ore di uptime                      |
-| `cpu_percent`      | Utilizzo CPU %                     |
-| `memory_free_gb`   | RAM libera (GB)                    |
-| `memory_total_gb`  | RAM totale (GB)                    |
+| Campo                    | Descrizione                              |
+| ------------------------ | ---------------------------------------- |
+| `server_name`            | Nome server                              |
+| `veeam_version`          | Versione Veeam installata                |
+| `uptime_hours`           | Ore di uptime                            |
+| `cpu_percent`            | Utilizzo CPU %                           |
+| `memory_free_gb`         | RAM libera (GB)                          |
+| `memory_total_gb`        | RAM totale (GB)                          |
+| `license_status`         | Stato licenza (Valid, Expired, etc.)     |
+| `license_type`           | Tipo licenza (Perpetual, Rental, etc.)   |
+| `license_edition`        | Edizione (Standard, Enterprise, etc.)    |
+| `license_expiration`     | Scadenza licenza (YYYY-MM-DD)            |
+| `support_expiration`     | Scadenza supporto (YYYY-MM-DD)           |
+| `support_id`             | ID contratto di supporto                 |
+| `licensed_instances`     | Istanze licenziate totali                |
+| `used_instances`         | Istanze attualmente in uso               |
 
 ### VEEAM_SERVICE_STATUS
 
@@ -483,6 +491,65 @@ Verifica copertura backup: VM/CT non coperte da alcun job di backup schedulato.
 | `guests[].vmid`              | ID della VM/CT                         |
 | `guests[].name`              | Nome della VM/CT                       |
 | `guests[].type`              | Tipo (`qemu` o `lxc`)                  |
+
+### VEEAM_DAILY_REPORT
+
+Riepilogo giornaliero di tutti i job Veeam eseguiti nelle ultime 24 ore. Inviato una volta al giorno alle 07:00.
+
+| Campo                              | Descrizione                            |
+| ---------------------------------- | -------------------------------------- |
+| `report_date`                      | Data del report (YYYY-MM-DD)           |
+| `lookback_hours`                   | Ore di lookback (default 24)           |
+| `jobs_total`                       | Numero totale job eseguiti             |
+| `jobs_success`                     | Job completati con successo            |
+| `jobs_warning`                     | Job con warning                        |
+| `jobs_failed`                      | Job falliti                            |
+| `jobs`                             | Array dettaglio per ogni job           |
+| `jobs[].job_name`                  | Nome del job                           |
+| `jobs[].job_type`                  | Tipo job (Backup, Replica, etc.)       |
+| `jobs[].status`                    | Esito (success/warning/failed)         |
+| `jobs[].start_time` / `end_time`   | Inizio e fine (UTC)                    |
+| `jobs[].duration_minutes`          | Durata in minuti                       |
+| `jobs[].data_size_gb`              | Dimensione dati processati (GB)        |
+| `jobs[].transferred_gb`            | Dati trasferiti (GB)                   |
+
+### PBS_DAILY_REPORT
+
+Riepilogo giornaliero di tutti i task backup PBS nelle ultime 24 ore. Inviato una volta al giorno alle 07:00.
+
+| Campo                              | Descrizione                            |
+| ---------------------------------- | -------------------------------------- |
+| `report_date`                      | Data del report (YYYY-MM-DD)           |
+| `lookback_hours`                   | Ore di lookback (default 24)           |
+| `jobs_total`                       | Numero totale task eseguiti            |
+| `jobs_success`                     | Task completati con successo           |
+| `jobs_warning`                     | Task con warning                       |
+| `jobs_failed`                      | Task falliti                           |
+| `jobs`                             | Array dettaglio per ogni task          |
+| `jobs[].backup_id`                 | ID backup                              |
+| `jobs[].datastore`                 | Datastore di destinazione              |
+| `jobs[].status`                    | Esito (success/warning/failed)         |
+| `jobs[].start_time` / `end_time`   | Inizio e fine (UTC)                    |
+| `jobs[].duration_minutes`          | Durata in minuti                       |
+
+### PVE_DAILY_REPORT
+
+Riepilogo giornaliero di tutti i task vzdump PVE nelle ultime 24 ore. Inviato una volta al giorno alle 07:00.
+
+| Campo                              | Descrizione                            |
+| ---------------------------------- | -------------------------------------- |
+| `report_date`                      | Data del report (YYYY-MM-DD)           |
+| `lookback_hours`                   | Ore di lookback (default 24)           |
+| `jobs_total`                       | Numero totale task eseguiti            |
+| `jobs_success`                     | Task completati con successo           |
+| `jobs_warning`                     | Task con warning                       |
+| `jobs_failed`                      | Task falliti                           |
+| `jobs`                             | Array dettaglio per ogni task          |
+| `jobs[].vmid`                      | ID della VM/CT                         |
+| `jobs[].status`                    | Esito (success/warning/failed)         |
+| `jobs[].start_time` / `end_time`   | Inizio e fine (UTC)                    |
+| `jobs[].duration_minutes`          | Durata in minuti                       |
+| `jobs[].exit_status`               | Esito task (OK, errore, etc.)          |
 
 ---
 

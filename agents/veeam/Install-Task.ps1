@@ -71,5 +71,19 @@ Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Silent
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal
 
 Write-Host "`nTask '$taskName' creato (ogni 30 minuti)" -ForegroundColor Green
+
+# --- Task report giornaliero ---
+$dailyTaskName = "VeeamBackupMonitor-DailyReport"
+$dailyAction = New-ScheduledTaskAction -Execute "powershell.exe" `
+    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$InstallPath\VeeamBackupMonitor.ps1`" -ConfigPath `"$InstallPath\config.json`" -DailyReport"
+
+$dailyTrigger = New-ScheduledTaskTrigger -Daily -At "07:00"
+$dailySettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+
+Unregister-ScheduledTask -TaskName $dailyTaskName -Confirm:$false -ErrorAction SilentlyContinue
+Register-ScheduledTask -TaskName $dailyTaskName -Action $dailyAction -Trigger $dailyTrigger -Settings $dailySettings -Principal $principal
+
+Write-Host "Task '$dailyTaskName' creato (ogni giorno alle 07:00)" -ForegroundColor Green
 Write-Host "`nInstallazione completata. Per testare:" -ForegroundColor Yellow
 Write-Host "  powershell -ExecutionPolicy Bypass -File `"$InstallPath\VeeamBackupMonitor.ps1`" -TestMode" -ForegroundColor White
+Write-Host "  powershell -ExecutionPolicy Bypass -File `"$InstallPath\VeeamBackupMonitor.ps1`" -TestMode -DailyReport" -ForegroundColor White

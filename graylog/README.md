@@ -41,7 +41,7 @@ Dopo l'import, verifica che i campi vengano estratti in **Search** cercando un m
 Se preferisci le pipeline rules:
 
 1. **System > Pipelines > Manage rules**
-2. Crea ogni regola da `pipeline-rules.txt` (7 regole totali)
+2. Crea ogni regola da `pipeline-rules.txt` (8 regole totali)
 3. **System > Pipelines > Add new pipeline**: `Backup Monitor Processing`
 4. Aggiungi le regole alla pipeline:
    - **Stage 0**: `backup_monitor_parse_json` (estrae JSON e campi base)
@@ -60,12 +60,14 @@ Gli agent inviano questi tipi di messaggio (campo `message_type`):
 - `VEEAM_SERVICE_STATUS` - Stato servizi Windows Veeam
 - `VEEAM_REPOSITORY_STATUS` - Stato repository
 - `VEEAM_JOB_RESULT` - Risultato job backup
+- `VEEAM_DAILY_REPORT` - Report giornaliero (07:00)
 
 ### PBS Agent
 
 - `PBS_SERVER_STATUS` - Stato server PBS
 - `PBS_DATASTORE_STATUS` - Stato datastore
 - `PBS_BACKUP_RESULT` - Risultato task backup
+- `PBS_DAILY_REPORT` - Report giornaliero (07:00)
 
 ### PVE Agent
 
@@ -73,6 +75,7 @@ Gli agent inviano questi tipi di messaggio (campo `message_type`):
 - `PVE_STORAGE_STATUS` - Stato storage
 - `PVE_BACKUP_RESULT` - Risultato task vzdump
 - `PVE_BACKUP_COVERAGE` - VM/CT senza backup schedulato
+- `PVE_DAILY_REPORT` - Report giornaliero (07:00)
 
 ## Struttura JSON
 

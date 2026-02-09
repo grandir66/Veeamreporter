@@ -117,10 +117,38 @@ EOF
 
 cp "$SCRIPT_DIR/pve-monitor.timer" /etc/systemd/system/
 
+# Timer report giornaliero
+cat > /etc/systemd/system/pve-daily-report.service <<EOF
+[Unit]
+Description=PVE Backup Monitor - Report Giornaliero
+After=network.target pveproxy.service
+
+[Service]
+Type=oneshot
+ExecStart=$INSTALL_DIR/venv/bin/python $INSTALL_DIR/pve_monitor.py -c $CONFIG_FILE --daily-report
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat > /etc/systemd/system/pve-daily-report.timer <<EOF
+[Unit]
+Description=PVE Backup Monitor - Report giornaliero alle 07:00
+
+[Timer]
+OnCalendar=*-*-* 07:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
 systemctl daemon-reload
 systemctl enable --now pve-monitor.timer
+systemctl enable --now pve-daily-report.timer
 
 echo "Timer pve-monitor attivato (ogni 30 minuti)."
+echo "Timer pve-daily-report attivato (ogni giorno alle 07:00)."
 echo ""
 echo "=== Installazione completata ==="
 echo ""

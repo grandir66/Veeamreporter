@@ -8,7 +8,7 @@
 // 3. Collega le regole alla pipeline in ordine (Stage 0, Stage 1, etc.)
 // 4. Collega la pipeline allo stream "All messages" o crea uno stream dedicato
 //
-// REGOLE: 7 totali (1 Stage 0 + 6 Stage 1)
+// REGOLE: 8 totali (1 Stage 0 + 7 Stage 1)
 //
 // NOTA: Il campo "message" di Graylog contiene il formato:
 //   MSGID - {"message_type":"...", ...}
@@ -151,6 +151,15 @@ then
     set_field("server_cpu_percent", data.cpu_percent);
     set_field("server_memory_free_gb", data.memory_free_gb);
     set_field("server_memory_total_gb", data.memory_total_gb);
+
+    // Licenza Veeam (solo per VEEAM_SERVER_STATUS)
+    set_field("license_status", data.license_status);
+    set_field("license_type", data.license_type);
+    set_field("license_edition", data.license_edition);
+    set_field("license_expiration", data.license_expiration);
+    set_field("support_expiration", data.support_expiration);
+    set_field("licensed_instances", data.licensed_instances);
+    set_field("used_instances", data.used_instances);
 end
 
 // ----------------------------------------------------------------------------
@@ -185,4 +194,24 @@ then
     let data = parse_json(to_string($message.backup_json));
 
     set_field("not_backed_up_count", data.not_backed_up_count);
+end
+
+// ----------------------------------------------------------------------------
+// RULE 8: Parse campi DAILY REPORT (Stage 1)
+// ----------------------------------------------------------------------------
+rule "backup_monitor_daily_report"
+when
+    has_field("backup_message_type") AND
+    (to_string($message.backup_message_type) == "VEEAM_DAILY_REPORT" OR
+     to_string($message.backup_message_type) == "PBS_DAILY_REPORT" OR
+     to_string($message.backup_message_type) == "PVE_DAILY_REPORT")
+then
+    let data = parse_json(to_string($message.backup_json));
+
+    set_field("report_date", data.report_date);
+    set_field("lookback_hours", data.lookback_hours);
+    set_field("jobs_total", data.jobs_total);
+    set_field("jobs_success", data.jobs_success);
+    set_field("jobs_warning", data.jobs_warning);
+    set_field("jobs_failed", data.jobs_failed);
 end

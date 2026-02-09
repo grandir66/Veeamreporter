@@ -20,7 +20,8 @@
 [CmdletBinding()]
 param(
     [string]$ConfigPath = "$PSScriptRoot\config.json",
-    [switch]$TestMode
+    [switch]$TestMode,
+    [switch]$DailyReport
 )
 
 $ErrorActionPreference = "Stop"
@@ -132,6 +133,33 @@ function Get-VeeamServerStatus {
     $serverInfo = Get-VBRServerSession
     $version = (Get-ItemProperty "HKLM:\SOFTWARE\Veeam\Veeam Backup and Replication" -ErrorAction SilentlyContinue).CoreVersion
 
+    # Licenza
+    $licenseData = @{}
+    try {
+        $license = Get-VBRInstalledLicense
+        $licenseData = @{
+            license_status = $license.Status.ToString()
+            license_type = $license.Type.ToString()
+            license_edition = $license.Edition.ToString()
+            license_expiration = if ($license.ExpirationDate) { $license.ExpirationDate.ToString("yyyy-MM-dd") } else { $null }
+            support_expiration = if ($license.SupportExpirationDate) { $license.SupportExpirationDate.ToString("yyyy-MM-dd") } else { $null }
+            support_id = $license.SupportId
+        }
+
+        # Istanze licenziate
+        try {
+            $instances = Get-VBRInstanceLicenseSummary
+            $licenseData.licensed_instances = $instances.LicensedInstancesNumber
+            $licenseData.used_instances = $instances.UsedInstancesNumber
+        }
+        catch {
+            Write-Log "Info istanze licenza non disponibili: $_" -Level Warning
+        }
+    }
+    catch {
+        Write-Log "Errore lettura licenza: $_" -Level Warning
+    }
+
     $status = @{
         status = "success"
         server_name = $env:COMPUTERNAME
@@ -141,7 +169,7 @@ function Get-VeeamServerStatus {
         cpu_percent = [math]::Round((Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average, 1)
         memory_free_gb = [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB, 2)
         memory_total_gb = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 2)
-    }
+    } + $licenseData
 
     Send-Syslog -MessageType "VEEAM_SERVER_STATUS" -Data $status
 }
@@ -291,6 +319,70 @@ function Get-VeeamJobResults {
         }
     }
 }
+
+function Get-VeeamDailyReport {
+    Write-Log "Generazione report giornaliero..."
+
+    $lookbackHours = $Script:Config.veeam.lookback_hours
+    $cutoffTime = (Get-Date).AddHours(-$lookbackHours)
+
+    $jobs = Get-VBRJob -WarningAction SilentlyContinue
+    $allJobResults = @()
+
+    foreach ($job in $jobs) {
+        # Prendi TUTTE le sessioni nelle ultime 24h (non solo l'ultima)
+        $sessions = Get-VBRBackupSession | Where-Object {
+            $_.JobId -eq $job.Id -and $_.EndTime -gt $cutoffTime -and $_.EndTime -ne $null
+        } | Sort-Object EndTime -Descending
+
+        foreach ($session in $sessions) {
+            $status = switch ($session.Result.ToString()) {
+                "Success" { "success" }
+                "Warning" { "warning" }
+                "Failed"  { "failed" }
+                default   { "unknown" }
+            }
+
+            $duration = if ($session.EndTime -and $session.CreationTime) {
+                [int]($session.EndTime - $session.CreationTime).TotalSeconds
+            } else { 0 }
+
+            $allJobResults += @{
+                job_name = $job.Name
+                job_type = $job.JobType.ToString()
+                status = $status
+                start_time = $session.CreationTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+                end_time = $session.EndTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+                duration_minutes = [math]::Round($duration / 60, 1)
+                data_size_gb = [math]::Round($session.Progress.ProcessedSize / 1GB, 2)
+                transferred_gb = [math]::Round($session.Progress.TransferedSize / 1GB, 2)
+                result_message = $session.Info.Reason
+                is_retry = $session.IsRetryMode
+            }
+        }
+    }
+
+    $successCount = ($allJobResults | Where-Object { $_.status -eq "success" }).Count
+    $warningCount = ($allJobResults | Where-Object { $_.status -eq "warning" }).Count
+    $failedCount = ($allJobResults | Where-Object { $_.status -eq "failed" }).Count
+
+    # Status complessivo: failed se almeno un fallimento, warning se almeno un warning
+    $overallStatus = if ($failedCount -gt 0) { "failed" } elseif ($warningCount -gt 0) { "warning" } else { "success" }
+
+    $reportData = @{
+        status = $overallStatus
+        report_date = (Get-Date).ToString("yyyy-MM-dd")
+        lookback_hours = $lookbackHours
+        jobs_total = $allJobResults.Count
+        jobs_success = $successCount
+        jobs_warning = $warningCount
+        jobs_failed = $failedCount
+        jobs = $allJobResults
+    }
+
+    Send-Syslog -MessageType "VEEAM_DAILY_REPORT" -Data $reportData
+    Write-Log "Report giornaliero inviato: $($allJobResults.Count) job ($successCount ok, $warningCount warning, $failedCount failed)"
+}
 #endregion
 
 #region Main
@@ -311,11 +403,16 @@ try {
     # Inizializza Veeam
     Initialize-Veeam
 
-    # Raccogli e invia dati
-    Get-VeeamServerStatus
-    Get-VeeamServiceStatus
-    Get-VeeamRepositoryStatus
-    Get-VeeamJobResults
+    if ($DailyReport) {
+        # Report giornaliero: solo riepilogo completo 24h
+        Get-VeeamDailyReport
+    } else {
+        # Monitoraggio standard (ogni 30 min)
+        Get-VeeamServerStatus
+        Get-VeeamServiceStatus
+        Get-VeeamRepositoryStatus
+        Get-VeeamJobResults
+    }
 
     Write-Log "=== Completato ==="
 }
