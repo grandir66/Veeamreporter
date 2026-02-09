@@ -326,62 +326,84 @@ function Get-VeeamJobResults {
             $session = $allSessions | Where-Object { $_.JobId -eq $job.Id } |
                 Sort-Object EndTime -Descending | Select-Object -First 1
 
-            if (-not $session) {
-                Write-Log "Job '$($job.Name)' ($($job.JobType)): nessuna sessione completata nelle ultime ${lookbackHours}h"
-                continue
-            }
-
-            $status = switch ($session.Result.ToString()) {
-                "Success" { "success" }
-                "Warning" { "warning" }
-                "Failed"  { "failed" }
-                default   { "unknown" }
-            }
-
-            $duration = if ($session.EndTime -and $session.CreationTime) {
-                [int]($session.EndTime - $session.CreationTime).TotalSeconds
-            } else { 0 }
-
-            # Dettaglio VM/oggetti processati
-            $taskSessions = Get-VBRTaskSession -Session $session -ErrorAction SilentlyContinue
-            $objects = @()
-            foreach ($task in $taskSessions) {
-                $obj = @{
-                    name = $task.Name
-                    status = $task.Status.ToString().ToLower()
-                    size_bytes = $task.Progress.ProcessedSize
-                    duration_seconds = if ($task.Progress.Duration) { [int]$task.Progress.Duration.TotalSeconds } else { 0 }
+            if ($session) {
+                # Sessione completata nel periodo di lookback - report completo
+                $status = switch ($session.Result.ToString()) {
+                    "Success" { "success" }
+                    "Warning" { "warning" }
+                    "Failed"  { "failed" }
+                    default   { "unknown" }
                 }
-                if ($task.Status -ne 'Success' -and $task.Info.Reason) {
-                    $obj.error_message = $task.Info.Reason
+
+                $duration = if ($session.EndTime -and $session.CreationTime) {
+                    [int]($session.EndTime - $session.CreationTime).TotalSeconds
+                } else { 0 }
+
+                # Dettaglio VM/oggetti processati
+                $taskSessions = Get-VBRTaskSession -Session $session -ErrorAction SilentlyContinue
+                $objects = @()
+                foreach ($task in $taskSessions) {
+                    $obj = @{
+                        name = $task.Name
+                        status = $task.Status.ToString().ToLower()
+                        size_bytes = $task.Progress.ProcessedSize
+                        duration_seconds = if ($task.Progress.Duration) { [int]$task.Progress.Duration.TotalSeconds } else { 0 }
+                    }
+                    if ($task.Status -ne 'Success' -and $task.Info.Reason) {
+                        $obj.error_message = $task.Info.Reason
+                    }
+                    $objects += $obj
                 }
-                $objects += $obj
-            }
 
-            $bottleneck = $session.Progress.BottleneckInfo
-            $bottleneckStr = if ($bottleneck) { $bottleneck.ToString() } else { "None" }
+                $bottleneck = $session.Progress.BottleneckInfo
+                $bottleneckStr = if ($bottleneck) { $bottleneck.ToString() } else { "None" }
 
-            $jobData = @{
-                status = $status
-                job_id = $job.Id.ToString()
-                job_name = $job.Name
-                job_type = $job.JobType.ToString()
-                start_time = $session.CreationTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-                end_time = $session.EndTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-                duration_seconds = $duration
-                duration_minutes = [math]::Round($duration / 60, 1)
-                result_message = $session.Info.Reason
-                bottleneck = $bottleneckStr
-                is_retry = $session.IsRetryMode
-                data_size_bytes = $session.Progress.ProcessedSize
-                data_size_gb = [math]::Round($session.Progress.ProcessedSize / 1GB, 2)
-                transferred_bytes = $session.Progress.TransferedSize
-                transferred_gb = [math]::Round($session.Progress.TransferedSize / 1GB, 2)
-                objects_total = $objects.Count
-                objects_success = ($objects | Where-Object { $_.status -eq "success" }).Count
-                objects_warning = ($objects | Where-Object { $_.status -eq "warning" }).Count
-                objects_failed = ($objects | Where-Object { $_.status -eq "failed" }).Count
-                objects = $objects
+                $jobData = @{
+                    status = $status
+                    job_id = $job.Id.ToString()
+                    job_name = $job.Name
+                    job_type = $job.JobType.ToString()
+                    start_time = $session.CreationTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+                    end_time = $session.EndTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+                    duration_seconds = $duration
+                    duration_minutes = [math]::Round($duration / 60, 1)
+                    result_message = $session.Info.Reason
+                    bottleneck = $bottleneckStr
+                    is_retry = $session.IsRetryMode
+                    data_size_bytes = $session.Progress.ProcessedSize
+                    data_size_gb = [math]::Round($session.Progress.ProcessedSize / 1GB, 2)
+                    transferred_bytes = $session.Progress.TransferedSize
+                    transferred_gb = [math]::Round($session.Progress.TransferedSize / 1GB, 2)
+                    objects_total = $objects.Count
+                    objects_success = ($objects | Where-Object { $_.status -eq "success" }).Count
+                    objects_warning = ($objects | Where-Object { $_.status -eq "warning" }).Count
+                    objects_failed = ($objects | Where-Object { $_.status -eq "failed" }).Count
+                    objects = $objects
+                }
+            } else {
+                # Nessuna sessione recente - report stato dal job
+                $isRunning = try { $job.IsRunning } catch { $false }
+                $lastResult = try { $job.GetLastResult().ToString() } catch { "Unknown" }
+
+                $status = if ($isRunning) { "running" }
+                          elseif ($lastResult -eq "Failed") { "failed" }
+                          elseif ($lastResult -eq "Warning") { "warning" }
+                          elseif ($lastResult -eq "Success") { "success" }
+                          elseif ($lastResult -eq "None") { "idle" }
+                          else { "unknown" }
+
+                $resultMsg = if ($isRunning) { "In esecuzione" }
+                             elseif ($lastResult -eq "None") { "Mai eseguito" }
+                             else { "Ultima esecuzione oltre ${lookbackHours}h fa: $lastResult" }
+
+                $jobData = @{
+                    status = $status
+                    job_id = $job.Id.ToString()
+                    job_name = $job.Name
+                    job_type = $job.JobType.ToString()
+                    is_running = $isRunning
+                    result_message = $resultMsg
+                }
             }
 
             Send-Syslog -MessageType "VEEAM_JOB_RESULT" -Data $jobData
