@@ -563,35 +563,97 @@ def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode
                 
                 logger.info(f"Job {job_id}: trovati {len(vm_ids)} VM IDs: {vm_ids[:10]}{'...' if len(vm_ids) > 10 else ''}")
                 
-                for vmid in vm_ids:
-                    vm_name = f"VM-{vmid}"
-                    vm_type = "unknown"
-                    vm_node = nodes_list[0]  # Prova prima con il primo nodo
-                    
-                    # Prova a ottenere informazioni sulla VM/CT su tutti i nodi
-                    for try_node in nodes_list:
+                # Ottieni informazioni su tutte le VM/CT del cluster per avere nomi e dettagli
+                cluster_vms = {}
+                cluster_cts = {}
+                try:
+                    # Cerca su tutti i nodi del cluster
+                    all_nodes = nodes_list if nodes_list else [node]
+                    for n in all_nodes:
                         try:
-                            vm_info = pvesh_get(f"/nodes/{try_node}/qemu/{vmid}")
-                            vm_name = vm_info.get("name", f"VM-{vmid}")
-                            vm_type = "qemu"
-                            vm_node = try_node
-                            break
+                            qemu_list = pvesh_get(f"/nodes/{n}/qemu")
+                            for vm in qemu_list:
+                                vm_id = str(vm.get("vmid", ""))
+                                if vm_id:
+                                    cluster_vms[vm_id] = {
+                                        "name": vm.get("name", f"VM-{vm_id}"),
+                                        "type": "qemu",
+                                        "node": n,
+                                        "status": vm.get("status", "unknown"),
+                                        "maxdisk": vm.get("maxdisk", 0),
+                                        "maxmem": vm.get("maxmem", 0)
+                                    }
                         except:
-                            try:
-                                ct_info = pvesh_get(f"/nodes/{try_node}/lxc/{vmid}")
-                                vm_name = ct_info.get("name", f"CT-{vmid}")
-                                vm_type = "lxc"
-                                vm_node = try_node
-                                break
-                            except:
-                                continue
+                            pass
+                        try:
+                            lxc_list = pvesh_get(f"/nodes/{n}/lxc")
+                            for ct in lxc_list:
+                                ct_id = str(ct.get("vmid", ""))
+                                if ct_id:
+                                    cluster_cts[ct_id] = {
+                                        "name": ct.get("name", f"CT-{ct_id}"),
+                                        "type": "lxc",
+                                        "node": n,
+                                        "status": ct.get("status", "unknown"),
+                                        "maxdisk": ct.get("maxdisk", 0),
+                                        "maxmem": ct.get("maxmem", 0)
+                                    }
+                        except:
+                            pass
+                except Exception as e:
+                    logger.debug(f"Errore ottenimento lista VM/CT cluster: {e}")
+                
+                for vmid in vm_ids:
+                    # Cerca nella cache delle VM/CT del cluster
+                    vm_info = cluster_vms.get(vmid) or cluster_cts.get(vmid)
                     
-                    vm_list.append({
-                        "vmid": vmid,
-                        "name": vm_name,
-                        "type": vm_type,
-                        "node": vm_node
-                    })
+                    if vm_info:
+                        vm_list.append({
+                            "vmid": vmid,
+                            "name": vm_info["name"],
+                            "type": vm_info["type"],
+                            "node": vm_info["node"],
+                            "status": vm_info.get("status", "unknown"),
+                            "disk_size_bytes": vm_info.get("maxdisk", 0),
+                            "disk_size_gb": round(vm_info.get("maxdisk", 0) / (1024**3), 2) if vm_info.get("maxdisk", 0) > 0 else None,
+                            "memory_bytes": vm_info.get("maxmem", 0),
+                            "memory_gb": round(vm_info.get("maxmem", 0) / (1024**3), 2) if vm_info.get("maxmem", 0) > 0 else None
+                        })
+                    else:
+                        # Se non trovata nella cache locale, cerca nella lista delle risorse del cluster
+                        vm_name = f"VM-{vmid}"
+                        vm_type = "unknown"
+                        vm_node = nodes_list[0] if nodes_list else node
+                        vm_status = "unknown"
+                        vm_disk = 0
+                        vm_mem = 0
+                        
+                        try:
+                            # Cerca nella lista delle risorse del cluster (include tutti i nodi)
+                            resources = pvesh_get("/cluster/resources")
+                            for res in resources:
+                                if str(res.get("vmid", "")) == vmid:
+                                    vm_name = res.get("name", f"VM-{vmid}")
+                                    vm_type = "qemu" if res.get("type") == "qemu" else ("lxc" if res.get("type") == "lxc" else "unknown")
+                                    vm_node = res.get("node", nodes_list[0] if nodes_list else node)
+                                    vm_status = res.get("status", "unknown")
+                                    vm_disk = res.get("maxdisk", 0)
+                                    vm_mem = res.get("maxmem", 0)
+                                    break
+                        except Exception as e:
+                            logger.debug(f"Errore ricerca VM {vmid} in cluster/resources: {e}")
+                        
+                        vm_list.append({
+                            "vmid": vmid,
+                            "name": vm_name,
+                            "type": vm_type,
+                            "node": vm_node,
+                            "status": vm_status,
+                            "disk_size_bytes": vm_disk if vm_disk > 0 else None,
+                            "disk_size_gb": round(vm_disk / (1024**3), 2) if vm_disk > 0 else None,
+                            "memory_bytes": vm_mem if vm_mem > 0 else None,
+                            "memory_gb": round(vm_mem / (1024**3), 2) if vm_mem > 0 else None
+                        })
                 
                 if vm_list:
                     backup_jobs.append({
