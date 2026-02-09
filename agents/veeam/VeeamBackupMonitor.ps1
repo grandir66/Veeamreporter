@@ -429,13 +429,13 @@ try {
     Initialize-Veeam
 
     if ($DailyReport) {
-        # Report giornaliero (07:00): stato server + servizi + riepilogo 24h
+        # Report giornaliero (07:00): stato completo + riepilogo 24h
         Get-VeeamServerStatus
         Get-VeeamServiceStatus
+        Get-VeeamRepositoryStatus
         Get-VeeamDailyReport
     } else {
-        # Monitoraggio standard (ogni 30 min): solo repository e job
-        Get-VeeamRepositoryStatus
+        # Monitoraggio standard (ogni 30 min): solo risultati job
         Get-VeeamJobResults
     }
 
