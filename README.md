@@ -178,8 +178,10 @@ rm -f /tmp/veeamreporter.zip
 ### 2. Esegui l'installer
 
 ```bash
-sudo bash /tmp/veeamreporter/Veeamreporter-main/agents/pbs/install.sh
+bash /tmp/veeamreporter/Veeamreporter-main/agents/pbs/install.sh
 ```
+
+> **Nota:** Lo script deve essere eseguito come root. Se non sei già root, usa `sudo`. Lo script installerà automaticamente `unzip` e `python3-venv` se mancanti.
 
 L'installer chiede interattivamente:
 
@@ -241,8 +243,10 @@ rm -f /tmp/veeamreporter.zip
 ### Esegui l'installer PVE
 
 ```bash
-sudo bash /tmp/veeamreporter/Veeamreporter-main/agents/pve/install.sh
+bash /tmp/veeamreporter/Veeamreporter-main/agents/pve/install.sh
 ```
+
+> **Nota:** Lo script deve essere eseguito come root. Se non sei già root, usa `sudo`. Lo script installerà automaticamente `unzip` e `python3-venv` se mancanti.
 
 L'installer chiede interattivamente:
 

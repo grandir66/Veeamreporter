@@ -33,10 +33,24 @@ echo ""
 pveversion 2>/dev/null || true
 echo ""
 
+# --- Installa unzip se mancante ---
+if ! command -v unzip &>/dev/null; then
+    echo "Installazione unzip..."
+    apt-get update -qq && apt-get install -y -qq unzip
+fi
+
 # --- Installa python3-venv se mancante ---
 if ! python3 -m venv --help &>/dev/null; then
     echo "Installazione python3-venv..."
-    apt-get update -qq && apt-get install -y -qq python3-venv
+    # Rileva versione Python installata (es. 3.13)
+    PYTHON_VERSION=$(python3 --version 2>&1 | sed -E 's/.*Python ([0-9]+\.[0-9]+).*/\1/')
+    if [[ -n "$PYTHON_VERSION" ]] && apt-cache show "python${PYTHON_VERSION}-venv" &>/dev/null; then
+        echo "Installazione python${PYTHON_VERSION}-venv..."
+        apt-get update -qq && apt-get install -y -qq "python${PYTHON_VERSION}-venv"
+    else
+        echo "Installazione python3-venv..."
+        apt-get update -qq && apt-get install -y -qq python3-venv
+    fi
 fi
 
 # --- Copia file ---
