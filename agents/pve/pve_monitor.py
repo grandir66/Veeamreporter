@@ -193,42 +193,67 @@ def collect_node_status(node: str, syslog: SyslogSender, client: Dict, test_mode
 
 
 def collect_storage_status(node: str, syslog: SyslogSender, client: Dict, test_mode: bool):
-    """Raccoglie e invia stato degli storage"""
-    logger.info("Raccolta stato storage...")
+    """Raccoglie e invia stato degli storage di backup (uno per cluster, non per host)"""
+    logger.info("Raccolta stato storage backup...")
 
     try:
-        storages = pvesh_get(f"/nodes/{node}/storage", content="backup")
-
-        for st in storages:
-            if not st.get("active", 0):
+        # Usa cluster/resources per avere lista deduplicata (non per singolo nodo)
+        resources = pvesh_get("/cluster/resources", type="storage")
+        
+        # Filtra solo storage che contengono backup e deduplica per nome
+        seen = set()
+        backup_storages = []
+        
+        for res in resources:
+            storage_name = res.get("storage", "")
+            if storage_name in seen:
                 continue
-
-            total = st.get("total", 0)
-            used = st.get("used", 0)
-            avail = st.get("avail", total - used)
-            used_percent = round(st.get("used_fraction", 0) * 100, 1)
-
+            
+            # Verifica se lo storage supporta backup
+            content = res.get("content", "")
+            if "backup" not in content:
+                continue
+            
+            seen.add(storage_name)
+            
+            total = res.get("maxdisk", 0)
+            used = res.get("disk", 0)
+            avail = total - used if total > 0 else 0
+            used_percent = round((used / total * 100), 1) if total > 0 else 0
+            
             status = "success"
             if used_percent > 95:
                 status = "failed"
             elif used_percent > 90:
                 status = "warning"
-
-            data = {
-                "status": status,
-                "storage_name": st.get("storage", "unknown"),
-                "storage_type": st.get("type", "unknown"),
-                "content": st.get("content", ""),
-                "total_bytes": total,
-                "used_bytes": used,
-                "free_bytes": avail,
+            
+            backup_storages.append({
+                "name": storage_name,
+                "type": res.get("plugintype", "unknown"),
+                "total_gb": round(total / (1024 ** 3), 2) if total > 0 else None,
+                "used_gb": round(used / (1024 ** 3), 2) if used > 0 else None,
+                "free_gb": round(avail / (1024 ** 3), 2) if avail > 0 else None,
                 "used_percent": used_percent,
-                "total_gb": round(total / (1024 ** 3), 2),
-                "used_gb": round(used / (1024 ** 3), 2),
-                "free_gb": round(avail / (1024 ** 3), 2),
+                "status": status
+            })
+        
+        if backup_storages:
+            # Status globale: peggiore tra tutti gli storage
+            overall_status = "success"
+            for s in backup_storages:
+                if s["status"] == "failed":
+                    overall_status = "failed"
+                    break
+                elif s["status"] == "warning":
+                    overall_status = "warning"
+            
+            data = {
+                "status": overall_status,
+                "storage_count": len(backup_storages),
+                "storages": backup_storages
             }
-
             syslog.send("PVE_STORAGE_STATUS", data, client, test_mode)
+            
     except Exception as e:
         logger.error(f"Errore raccolta storage: {e}")
 

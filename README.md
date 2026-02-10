@@ -567,15 +567,17 @@ Stato del nodo Proxmox VE (CPU, memoria, uptime).
 
 ### PVE_STORAGE_STATUS
 
-Spazio degli storage Proxmox VE (local, NFS, CIFS, PBS backend, etc.).
+Stato degli storage di backup del cluster (solo storage con contenuto "backup", deduplicati, un messaggio per cluster).
 
 | Campo                              | Descrizione                        |
 | ---------------------------------- | ---------------------------------- |
-| `storage_name`                     | Nome storage                       |
-| `storage_type`                     | Tipo (dir, nfs, cifs, pbs, etc.)   |
-| `content`                          | Contenuto (backup, images, etc.)   |
-| `total_gb` / `used_gb` / `free_gb` | Spazio (GB)                        |
-| `used_percent`                     | Percentuale occupata               |
+| `storage_count`                    | Numero di storage backup           |
+| `storages`                         | Array degli storage                |
+| `storages[].name`                  | Nome storage                       |
+| `storages[].type`                  | Tipo (dir, nfs, cifs, pbs, etc.)   |
+| `storages[].total_gb` / `used_gb` / `free_gb` | Spazio (GB)             |
+| `storages[].used_percent`          | Percentuale occupata               |
+| `storages[].status`                | success/warning/failed             |
 
 ### PVE_BACKUP_RESULT
 
