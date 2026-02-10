@@ -655,9 +655,13 @@ def get_backup_task_info(node: str, vmid: str, storage: str, lookback_days: int 
     return {}
 
 
-def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode: bool):
-    """Raccoglie informazioni sui job di backup schedulati e le VM/CT che vengono backuppate"""
-    logger.info("Raccolta job di backup schedulati...")
+def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode: bool, lookback_hours: int = 24):
+    """Raccoglie informazioni sui job di backup che hanno eseguito backup nel periodo di lookback.
+    
+    NOTA: Invia solo job con VM che hanno backup_date nel periodo di lookback.
+    Non invia job che non hanno eseguito backup recentemente.
+    """
+    logger.info("Raccolta job di backup eseguiti...")
     
     # Resetta le cache per avere dati freschi
     clear_caches()
@@ -963,7 +967,22 @@ def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode
                     
                     vm_list.append(vm_data)
                 
-                if vm_list:
+                # Filtra solo VM che hanno backup_date nel periodo di lookback
+                cutoff_time = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+                vms_with_recent_backup = []
+                for vm in vm_list:
+                    backup_date_str = vm.get("backup_date")
+                    if backup_date_str:
+                        try:
+                            # Parse ISO 8601 date
+                            backup_dt = datetime.fromisoformat(backup_date_str.replace("Z", "+00:00"))
+                            if backup_dt >= cutoff_time:
+                                vms_with_recent_backup.append(vm)
+                        except:
+                            pass
+                
+                # Invia solo se ci sono VM con backup recente
+                if vms_with_recent_backup:
                     backup_jobs.append({
                         "job_id": job_id,
                         "nodes": job.get("nodes", node),
@@ -973,8 +992,8 @@ def collect_backup_jobs(node: str, syslog: SyslogSender, client: Dict, test_mode
                         "mode": job.get("mode", "snapshot"),
                         "compress": job.get("compress", ""),
                         "all": job.get("all", False),
-                        "vms": vm_list,
-                        "vm_count": len(vm_list)
+                        "vms": vms_with_recent_backup,
+                        "vm_count": len(vms_with_recent_backup)
                     })
             except Exception as e:
                 logger.debug(f"Errore elaborazione job {job_id}: {e}")
@@ -1318,7 +1337,7 @@ def main():
         collect_node_status(node, syslog, client, args.test)
         collect_storage_status(node, syslog, client, args.test)
         collect_backup_results(node, syslog, client, lookback, args.test)
-        collect_backup_jobs(node, syslog, client, args.test)
+        collect_backup_jobs(node, syslog, client, args.test, lookback)
         collect_backup_coverage(syslog, client, args.test)
 
     logger.info("=== Completato ===")

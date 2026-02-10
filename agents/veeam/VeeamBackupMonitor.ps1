@@ -497,34 +497,11 @@ function Get-VeeamJobResults {
                 if ($errorDetails) {
                     $jobData.error_details = $errorDetails
                 }
-            } else {
-                # Nessuna sessione recente - report stato dal job
-                $isRunning = try { $job.IsRunning } catch { $false }
-                $lastResult = try { $job.GetLastResult().ToString() } catch { "Unknown" }
 
-                $status = if ($isRunning) { "running" }
-                          elseif ($lastResult -eq "Failed") { "failed" }
-                          elseif ($lastResult -eq "Warning") { "warning" }
-                          elseif ($lastResult -eq "Success") { "success" }
-                          elseif ($lastResult -eq "None") { "idle" }
-                          else { "unknown" }
-
-                $resultMsg = if ($isRunning) { "In esecuzione" }
-                             elseif ($lastResult -eq "None") { "Mai eseguito" }
-                             else { "Ultima esecuzione oltre ${lookbackHours}h fa: $lastResult" }
-
-                $jobData = @{
-                    status = $status
-                    job_id = $job.Id.ToString()
-                    job_name = $job.Name
-                    job_type = $job.JobType.ToString()
-                    is_running = $isRunning
-                    result_message = $resultMsg
-                }
+                Send-Syslog -MessageType "VEEAM_JOB_RESULT" -Data $jobData
+                Write-Log "Job '$($job.Name)': $status"
             }
-
-            Send-Syslog -MessageType "VEEAM_JOB_RESULT" -Data $jobData
-            Write-Log "Job '$($job.Name)': $status"
+            # Se non c'è sessione recente, NON inviare nulla (evita di sporcare la storia)
         }
     }
     catch {
