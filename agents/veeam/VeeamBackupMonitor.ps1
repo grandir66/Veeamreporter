@@ -204,13 +204,27 @@ function Get-VeeamServerStatus {
         }
 
         # CPU - uso contatore performance (piu affidabile e veloce di Win32_Processor)
+        # Get-Counter puo bloccarsi indefinitamente su alcuni sistemi (contatori corrotti, primo avvio)
         Write-Log "Lettura CPU..."
         $cpuPercent = 0
+        $cpuJob = $null
         try {
-            $cpuPercent = [math]::Round((Get-Counter '\Processor(_Total)\% Processor Time' -ErrorAction Stop).CounterSamples[0].CookedValue, 1)
+            $cpuJob = Start-Job -ScriptBlock {
+                (Get-Counter '\Processor(_Total)\% Processor Time' -ErrorAction Stop).CounterSamples[0].CookedValue
+            }
+            $completed = Wait-Job $cpuJob -Timeout 15
+            if ($completed) {
+                $cpuPercent = [math]::Round((Receive-Job $cpuJob), 1)
+            } else {
+                Stop-Job $cpuJob -ErrorAction SilentlyContinue
+                Write-Log "Get-Counter timeout (15s), skip CPU" -Level Warning
+            }
         }
         catch {
-            Write-Log "Get-Counter fallito, skip CPU" -Level Warning
+            Write-Log "Get-Counter fallito, skip CPU: $_" -Level Warning
+        }
+        finally {
+            if ($cpuJob) { Remove-Job $cpuJob -Force -ErrorAction SilentlyContinue }
         }
 
         $status = @{
