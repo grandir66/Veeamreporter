@@ -31,8 +31,9 @@ Il sistema permette di centralizzare il monitoraggio di:
                                  │
                                  ▼
                     ┌────────────────────────┐
-                    │   Syslog UDP (4514)    │
-                    │   RFC 5424 + JSON      │
+                    │ Syslog TCP 4514        │
+                    │ GELF UDP 8514 (Veeam)  │
+                    │ RFC 5424 + JSON        │
                     └────────────┬───────────┘
                                  │
                                  ▼
@@ -66,11 +67,11 @@ Il sistema permette di centralizzare il monitoraggio di:
 - Invia report giornaliero alle 07:00
 
 **Messaggi inviati:**
-- `VEEAM_SERVER_STATUS` - Stato server e licenza
-- `VEEAM_SERVICE_STATUS` - Stato servizi Windows
-- `VEEAM_REPOSITORY_STATUS` - Spazio repository
-- `VEEAM_JOB_RESULT` - Risultato singolo job
-- `VEEAM_DAILY_REPORT` - Riepilogo giornaliero
+- `VEEAM_SERVER_STATUS` - Stato server e licenza (GELF 8514)
+- `VEEAM_SERVICE_STATUS` - Stato servizi Windows (GELF 8514)
+- `VEEAM_REPOSITORY_STATUS` - Spazio repository (GELF 8514)
+- `VEEAM_JOB_RESULT` - Risultato singolo job (Syslog 4514)
+- `VEEAM_DAILY_REPORT` - Riepilogo giornaliero (GELF 8514)
 
 ### 2. Agent PBS (Linux)
 
@@ -150,7 +151,7 @@ Il sistema permette di centralizzare il monitoraggio di:
 ```json
 {
   "message_type": "VEEAM_SERVER_STATUS",
-  "version": "2.0.0",
+  "version": "2.16.3",
   "timestamp": "2026-02-09T10:30:00.000Z",
   "client": {
     "code": "CLI001",
@@ -210,7 +211,13 @@ Il sistema permette di centralizzare il monitoraggio di:
   "syslog": {
     "server": "graylog.example.com",
     "port": 4514,
-    "facility": "local0"
+    "facility": "local0",
+    "protocol": "tcp"
+  },
+  "gelf": {
+    "server": "graylog.example.com",
+    "port": 8514,
+    "protocol": "udp"
   },
   "veeam": {
     "lookback_hours": 24
@@ -288,9 +295,44 @@ python3 pbs_monitor.py -c config.yaml --test
 
 ## Versioning
 
-- **Versione corrente:** 2.0.0
+- **Versione corrente:** 2.16.3
 - **Formato:** SemVer (Major.Minor.Patch)
 - **Campo versione:** Incluso in ogni messaggio syslog
+
+## Aggiornamento
+
+### 1. Scarica la versione aggiornata
+
+```bash
+cd /path/to/Veeamreporter
+git pull origin main
+```
+
+### 2. Aggiorna i client
+
+**Veeam (Windows):**
+```powershell
+# Copia il file aggiornato (da un PC con il repo)
+Copy-Item .\agents\veeam\VeeamBackupMonitor.ps1 -Destination \\SERVER\C$\BackupMonitor\
+
+# Oppure download diretto da GitHub
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/grandir66/Veeamreporter/main/agents/veeam/VeeamBackupMonitor.ps1" -OutFile "C:\BackupMonitor\VeeamBackupMonitor.ps1" -UseBasicParsing
+```
+
+**PVE (Linux):**
+```bash
+scp agents/pve/pve_monitor.py root@NODO-PVE:/usr/local/bin/
+# oppure dove è installato (es. /opt/backup-monitor/)
+```
+
+**PBS (Linux):**
+```bash
+scp agents/pbs/pbs_monitor.py root@PBS-SERVER:/usr/local/bin/
+```
+
+### 3. Nessun riavvio necessario
+
+Il Scheduled Task (Veeam) e i timer systemd (PVE/PBS) useranno automaticamente la nuova versione alla prossima esecuzione.
 
 ## Repository Git
 

@@ -16,23 +16,44 @@ Veeam B&R / PBS Server
         ▼
   Agent (PS1 / Python)
         │
-        ▼
-  JSON serializzato in syslog RFC 5424
-        │
-        ▼
-  Graylog (UDP porta 4514)
-        │
-        ▼
-  Extractors / Pipeline Rules
-        │
-        ▼
-  Dashboard, Allarmi, Report
+        ├──────────────────────────────────┐
+        ▼                                  ▼
+  Syslog TCP 4514                    GELF UDP 8514
+  (job backup, risultati)            (heartbeat, stato server)
+        │                                  │
+        └──────────────────┬───────────────┘
+                           ▼
+                    Graylog
+                           │
+                           ▼
+              Extractors / Pipeline Rules
+                           │
+                           ▼
+              Dashboard, Allarmi, Report
 ```
 
-- **Protocollo:** Syslog RFC 5424 su UDP
-- **Porta:** 4514 (configurabile)
+- **Syslog TCP 4514:** Job backup, risultati task (VEEAM_JOB_RESULT, PBS_BACKUP_RESULT, PVE_BACKUP_RESULT)
+- **GELF UDP 8514:** Heartbeat e stato (VEEAM_SERVER_STATUS, VEEAM_SERVICE_STATUS, VEEAM_REPOSITORY_STATUS, VEEAM_DAILY_REPORT) – solo agent Veeam
 - **Frequenza:** Ogni 30 minuti (monitoraggio) + report giornaliero alle 07:00
-- **Versione:** 2.0.0
+- **Versione:** 2.16.3
+
+## Aggiornamento
+
+**1. Scarica la versione aggiornata:**
+```bash
+cd /path/to/Veeamreporter
+git pull origin main
+```
+
+**2. Aggiorna i client:**
+
+| Agent | Comando |
+|-------|---------|
+| **PVE** | `curl -sL https://raw.githubusercontent.com/grandir66/Veeamreporter/main/agents/pve/update.sh \| bash` (come root) |
+| **PBS** | `curl -sL https://raw.githubusercontent.com/grandir66/Veeamreporter/main/agents/pbs/update.sh \| bash` (come root) |
+| **Veeam** | `Invoke-WebRequest -Uri "https://raw.githubusercontent.com/grandir66/Veeamreporter/main/agents/veeam/VeeamBackupMonitor.ps1" -OutFile "C:\BackupMonitor\VeeamBackupMonitor.ps1" -UseBasicParsing` |
+
+Nessun riavvio necessario: la prossima esecuzione userà la nuova versione. Per abilitare GELF (heartbeat su 8514) su installazioni esistenti, riesegui `Install-Task.ps1` – aggiungerà la sezione `gelf` al config senza modificare il resto.
 
 ## Struttura Progetto
 
@@ -47,6 +68,7 @@ Veeam B&R / PBS Server
 │   │   ├── config.example.yaml       # Template configurazione
 │   │   ├── requirements.txt          # Dipendenze Python
 │   │   ├── install.sh                # Installer interattivo
+│   │   ├── update.sh                 # Script aggiornamento
 │   │   ├── pbs-monitor.service       # Unit systemd
 │   │   └── pbs-monitor.timer         # Timer systemd (30 min)
 │   └── pve/                          # Agent Proxmox VE (Linux)
@@ -88,7 +110,8 @@ Veeam B&R / PBS Server
 
 ### Graylog
 
-- Graylog con input **Syslog UDP** sulla porta 4514
+- Graylog con input **Syslog TCP** sulla porta 4514
+- Per l'agent Veeam: input **GELF UDP** sulla porta 8514 (heartbeat e stato server)
 
 ---
 
@@ -126,7 +149,7 @@ L'installer chiede interattivamente:
 - **Server Graylog** - IP o hostname
 - **Porta syslog** (default: 4514)
 
-I dati inseriti vengono salvati in `config.json` (creato dal template `config.example.json` se non presente). Poi l'installer:
+I dati inseriti vengono salvati in `config.json` (creato dal template `config.example.json` se non presente). **GELF** (heartbeat su porta 8514) viene abilitato automaticamente con lo stesso server di syslog. In caso di aggiornamento, l'installer aggiunge GELF al config se mancante. Poi l'installer:
 
 - Sblocca tutti i file `.ps1` e `.json` (rimuove il flag Zone.Identifier di Windows)
 - Crea un task schedulato `VeeamBackupMonitor` che gira ogni **30 minuti**
@@ -141,6 +164,9 @@ Per modificare parametri aggiuntivi, edita manualmente `C:\BackupMonitor\config.
 | Campo | Descrizione | Default |
 | ----- | ----------- | ------- |
 | `syslog.facility` | Facility syslog (local0-local7) | local0 |
+| `syslog.protocol` | Protocollo syslog (tcp/udp) | tcp |
+| `gelf.server` | Server GELF (heartbeat) – stesso di syslog se non specificato | da syslog |
+| `gelf.port` | Porta GELF | 8514 |
 | `veeam.lookback_hours` | Ore indietro per cercare job completati | 24 |
 | `log_path` | Cartella log locali | C:\BackupMonitor\Logs |
 
@@ -348,16 +374,27 @@ Test dopo l'aggiornamento:
 
 ## Configurazione Graylog
 
-### 1. Crea Input Syslog UDP
+### 1. Crea Input Syslog TCP
 
-1. Vai in **System > Inputs > Select Input: Syslog UDP**
+1. Vai in **System > Inputs > Select Input: Syslog TCP**
 2. Configura:
    - **Title:** `Backup Monitor`
    - **Bind address:** `0.0.0.0`
    - **Port:** `4514`
    - **Store full message:** abilitato
 
-### 2. Configura il parsing
+### 2. Crea Input GELF UDP (solo per agent Veeam – heartbeat)
+
+1. Vai in **System > Inputs > Select Input: GELF UDP**
+2. Configura:
+   - **Title:** `Backup Monitor GELF`
+   - **Bind address:** `0.0.0.0`
+   - **Port:** `8514`
+   - **Store full message:** abilitato
+
+I messaggi di heartbeat (stato server, servizi, repository, report giornaliero) arrivano in formato GELF su questa porta.
+
+### 3. Configura il parsing
 
 Puoi usare **uno** dei due metodi:
 
@@ -382,7 +419,7 @@ Ogni messaggio contiene campi comuni + campi specifici per tipo.
 | Campo              | Descrizione                        |
 | ------------------ | ---------------------------------- |
 | `message_type`     | Tipo messaggio (vedi sotto)        |
-| `version`          | Versione agent (2.0.0)             |
+| `version`          | Versione agent (2.16.3)             |
 | `timestamp`        | Timestamp UTC ISO 8601             |
 | `client.code`      | Codice cliente                     |
 | `client.name`      | Nome cliente                       |

@@ -44,6 +44,19 @@ if ($isConfigured) {
     Write-Host "`nConfigurazione esistente trovata in '$configPath'" -ForegroundColor Green
     Write-Host "  Cliente: $($config.client.code) - $($config.client.name)" -ForegroundColor Cyan
     Write-Host "  Syslog:  $($config.syslog.server):$($config.syslog.port)" -ForegroundColor Cyan
+    # Aggiornamento: abilita GELF se mancante (stesso server syslog, porta 8514)
+    $needsSave = $false
+    if (-not $config.gelf -or -not $config.gelf.server) {
+        if (-not $config.gelf) { $config | Add-Member -MemberType NoteProperty -Name "gelf" -Value ([PSCustomObject]@{}) -Force }
+        $config.gelf.server = $config.syslog.server
+        $config.gelf.port = 8514
+        $config.gelf.protocol = "udp"
+        $needsSave = $true
+    }
+    if ($needsSave) {
+        $config | ConvertTo-Json -Depth 5 | Set-Content -Path $configPath -Encoding UTF8
+        Write-Host "  GELF:    $($config.gelf.server):$($config.gelf.port) (abilitato)" -ForegroundColor Cyan
+    }
     Write-Host "  (per riconfigurare, modificare config.json o eliminarlo prima di reinstallare)" -ForegroundColor DarkGray
 } else {
     Write-Host "`n=== Configurazione Backup Monitor ===" -ForegroundColor Yellow
@@ -62,12 +75,18 @@ if ($isConfigured) {
     $config.client.site = if ($clientSite) { $clientSite } else { "sede-principale" }
     $config.syslog.server = $syslogServer
     $config.syslog.port = if ($syslogPort) { [int]$syslogPort } else { 4514 }
+    # GELF: stesso server di syslog, porta 8514 (abilitato di default)
+    if (-not $config.gelf) { $config | Add-Member -MemberType NoteProperty -Name "gelf" -Value ([PSCustomObject]@{}) -Force }
+    $config.gelf.server = $syslogServer
+    $config.gelf.port = 8514
+    $config.gelf.protocol = "udp"
 
     # Salva config.json
     $config | ConvertTo-Json -Depth 5 | Set-Content -Path $configPath -Encoding UTF8
     Write-Host "`nConfigurazione salvata in '$configPath'" -ForegroundColor Green
     Write-Host "  Cliente: $($config.client.code) - $($config.client.name)" -ForegroundColor Cyan
     Write-Host "  Syslog:  $($config.syslog.server):$($config.syslog.port)" -ForegroundColor Cyan
+    Write-Host "  GELF:    $($config.gelf.server):$($config.gelf.port) (heartbeat)" -ForegroundColor Cyan
 }
 
 # --- Creazione task schedulato ---

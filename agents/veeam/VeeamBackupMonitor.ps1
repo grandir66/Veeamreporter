@@ -12,6 +12,8 @@
 .EXAMPLE
     .\VeeamBackupMonitor.ps1 -ConfigPath .\config.json
     .\VeeamBackupMonitor.ps1 -ConfigPath .\config.json -TestMode
+    .\VeeamBackupMonitor.ps1 -VerboseLog
+    .\VeeamBackupMonitor.ps1 -ConfigPath .\config.json -VerboseLog -DailyReport
 
 .NOTES
     Richiede: Veeam Backup & Replication PowerShell Module
@@ -21,7 +23,8 @@
 param(
     [string]$ConfigPath,
     [switch]$TestMode,
-    [switch]$DailyReport
+    [switch]$DailyReport,
+    [switch]$VerboseLog
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,7 +34,7 @@ if (-not $ConfigPath) {
     $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
     $ConfigPath = Join-Path $scriptDir "config.json"
 }
-$Script:Version = "2.0.0"
+$Script:Version = "2.16.3"
 
 #region Logging
 function Write-Log {
@@ -44,75 +47,131 @@ function Write-Log {
         Add-Content -Path $logFile -Value $log -ErrorAction SilentlyContinue
     }
 }
+
+# Log verbose: dati completi e dettagli errori per debug/test
+function Write-VerboseLog {
+    param([string]$Message, [string]$Level = "Verbose")
+    if (-not $Script:VerboseLogEnabled) { return }
+    $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"
+    $log = "[$ts] [$Level] $Message"
+    if ($Script:Config.log_path) {
+        $verboseFile = Join-Path $Script:Config.log_path "veeam-monitor-verbose-$(Get-Date -Format 'yyyy-MM-dd').log"
+        Add-Content -Path $verboseFile -Value $log -ErrorAction SilentlyContinue
+    }
+}
+
+function Write-ErrorVerbose {
+    param([string]$Context, $ErrorRecord)
+    if (-not $Script:VerboseLogEnabled) { return }
+    $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"
+    $msg = if ($ErrorRecord.Exception) { $ErrorRecord.Exception.Message } else { $ErrorRecord.ToString() }
+    $stack = if ($ErrorRecord.ScriptStackTrace) { $ErrorRecord.ScriptStackTrace } else { $ErrorRecord.Exception.StackTrace }
+    $log = @"
+[$ts] [ERROR] $Context
+  Message: $msg
+  StackTrace: $stack
+"@
+    if ($Script:Config.log_path) {
+        $verboseFile = Join-Path $Script:Config.log_path "veeam-monitor-verbose-$(Get-Date -Format 'yyyy-MM-dd').log"
+        Add-Content -Path $verboseFile -Value $log -ErrorAction SilentlyContinue
+    }
+}
 #endregion
 
-#region Syslog
-function Send-Syslog {
-    param(
-        [string]$MessageType,
-        [hashtable]$Data
-    )
+#region Syslog / GELF
+# Messaggi heartbeat -> GELF 8514; VEEAM_JOB_RESULT -> Syslog 4514
+$Script:HeartbeatTypes = @("VEEAM_SERVER_STATUS", "VEEAM_SERVICE_STATUS", "VEEAM_REPOSITORY_STATUS", "VEEAM_DAILY_REPORT")
 
-    $syslog = $Script:Config.syslog
-
-    # Severity: 6=Info, 4=Warning, 3=Error
-    $severity = switch ($Data.status) {
-        "success" { 6 }
-        "warning" { 4 }
-        "failed"  { 3 }
-        default   { 6 }
-    }
-
-    $facilityMap = @{ "local0"=16; "local1"=17; "local2"=18; "local3"=19; "local4"=20; "local5"=21; "local6"=22; "local7"=23 }
-    $facility = $facilityMap[$syslog.facility]
-    $priority = ($facility * 8) + $severity
-
-    $timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
-    $hostname = $env:COMPUTERNAME
-
-    # Costruisci JSON payload
-    $payload = @{
-        message_type = $MessageType
-        version = $Script:Version
-        timestamp = $timestamp
-        client = $Script:Config.client
-        agent_hostname = $hostname
-    } + $Data
-
-    $jsonPayload = $payload | ConvertTo-Json -Depth 10 -Compress
-
-    # RFC 5424 format
-    $syslogMsg = "<$priority>1 $timestamp $hostname veeam-backup-monitor $PID $MessageType - $jsonPayload"
-
-    if ($TestMode) {
-        Write-Host "`n=== SYSLOG MESSAGE ($($syslogMsg.Length) bytes) ===" -ForegroundColor Cyan
-        Write-Host $syslogMsg
-        Write-Host "======================`n" -ForegroundColor Cyan
-        return
-    }
-
-    $protocol = if ($syslog.protocol) { $syslog.protocol.ToLower() } else { "tcp" }
-    
-    try {
-        if ($protocol -eq "tcp") {
-            $tcpClient = New-Object System.Net.Sockets.TcpClient
-            $tcpClient.Connect($syslog.server, $syslog.port)
-            $stream = $tcpClient.GetStream()
-            $bytes = [System.Text.Encoding]::UTF8.GetBytes($syslogMsg + "`n")
-            $stream.Write($bytes, 0, $bytes.Length)
-            $stream.Close()
-            $tcpClient.Close()
-            Write-Log "Syslog inviato (TCP): $MessageType ($($syslogMsg.Length) bytes)"
-        } else {
-            $udpClient = New-Object System.Net.Sockets.UdpClient
-            $bytes = [System.Text.Encoding]::UTF8.GetBytes($syslogMsg)
-            $udpClient.Send($bytes, $bytes.Length, $syslog.server, $syslog.port) | Out-Null
-            $udpClient.Close()
-            Write-Log "Syslog inviato (UDP): $MessageType ($($syslogMsg.Length) bytes)"
+function ConvertTo-GelfFields {
+    param($InputObject, [string]$Prefix = "")
+    $result = @{}
+    $keys = if ($InputObject -is [hashtable]) { $InputObject.Keys } else { $InputObject.PSObject.Properties.Name }
+    foreach ($key in $keys) {
+        $val = if ($InputObject -is [hashtable]) { $InputObject[$key] } else { $InputObject.$key }
+        $gelfKey = if ($Prefix) { "_${Prefix}_$key" } else { "_$key" }
+        if ($val -is [hashtable] -or $val -is [PSCustomObject]) {
+            $nested = if ($val -is [hashtable]) { $val } else {
+                $ht = @{}; $val.PSObject.Properties | ForEach-Object { $ht[$_.Name] = $_.Value }; $ht
+            }
+            $flattened = ConvertTo-GelfFields -InputObject $nested -Prefix $key
+            foreach ($k in $flattened.Keys) { $result[$k] = $flattened[$k] }
+        } elseif ($null -ne $val) {
+            $result[$gelfKey] = $val
         }
     }
-    catch {
-        Write-Log "Errore invio syslog: $_" -Level Error
+    return $result
+}
+
+function Send-Gelf {
+    param([string]$MessageType, [hashtable]$Data)
+    $gelf = $Script:Config.gelf
+    if (-not $gelf -or -not $gelf.server) { return }
+    $level = switch ($Data.status) { "success" { 6 } "warning" { 4 } "failed" { 3 } default { 6 } }
+    $ts = (Get-Date).ToUniversalTime()
+    $tsIso = $ts.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
+    $tsUnix = [math]::Round(($ts - [datetime]'1970-01-01Z').TotalSeconds, 3)
+    $hostname = $env:COMPUTERNAME
+    $payload = @{ message_type = $MessageType; version = $Script:Version; timestamp = $tsIso; client = $Script:Config.client; agent_hostname = $hostname } + $Data
+    $gelfBase = @{ version = "1.1"; host = $hostname; short_message = "$MessageType : $($Data.status)"; full_message = ($payload | ConvertTo-Json -Depth 10 -Compress); timestamp = $tsUnix; level = $level }
+    $custom = ConvertTo-GelfFields -InputObject $payload
+    $gelfMsg = ($gelfBase + $custom) | ConvertTo-Json -Depth 10 -Compress
+    Write-VerboseLog "=== GELF $MessageType ($($gelfMsg.Length) bytes) ==="
+    Write-VerboseLog $gelfMsg
+    if ($TestMode) { Write-Host "`n=== GELF ($($gelfMsg.Length) bytes) ===`n$gelfMsg`n======================`n" -ForegroundColor Cyan; return }
+    $port = if ($gelf.port) { $gelf.port } else { 8514 }
+    $proto = if ($gelf.protocol) { $gelf.protocol.ToLower() } else { "udp" }
+    try {
+        if ($proto -eq "tcp") {
+            $tcp = New-Object System.Net.Sockets.TcpClient
+            $tcp.Connect($gelf.server, $port)
+            $tcp.GetStream().Write([System.Text.Encoding]::UTF8.GetBytes($gelfMsg + "`0"), 0, $gelfMsg.Length + 1)
+            $tcp.Close()
+        } else {
+            $udp = New-Object System.Net.Sockets.UdpClient
+            $udp.Send([System.Text.Encoding]::UTF8.GetBytes($gelfMsg), $gelfMsg.Length, $gelf.server, $port) | Out-Null
+            $udp.Close()
+        }
+        Write-Log "GELF inviato ($proto): $MessageType -> $($gelf.server):$port"
+    } catch { Write-Log "Errore GELF: $_" -Level Error; Write-ErrorVerbose -Context "Send-Gelf $MessageType" -ErrorRecord $_ }
+}
+
+function Send-Syslog {
+    param([string]$MessageType, [hashtable]$Data)
+    $syslog = $Script:Config.syslog
+    $severity = switch ($Data.status) { "success" { 6 } "warning" { 4 } "failed" { 3 } default { 6 } }
+    $facilityMap = @{ "local0"=16; "local1"=17; "local2"=18; "local3"=19; "local4"=20; "local5"=21; "local6"=22; "local7"=23 }
+    $priority = ($facilityMap[$syslog.facility] * 8) + $severity
+    $timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
+    $hostname = $env:COMPUTERNAME
+    $payload = @{ message_type = $MessageType; version = $Script:Version; timestamp = $timestamp; client = $Script:Config.client; agent_hostname = $hostname } + $Data
+    $jsonPayload = $payload | ConvertTo-Json -Depth 10 -Compress
+    $syslogMsg = "<$priority>1 $timestamp $hostname veeam-backup-monitor $PID $MessageType - $jsonPayload"
+    Write-VerboseLog "=== SYSLOG $MessageType ($($syslogMsg.Length) bytes) ==="
+    Write-VerboseLog $syslogMsg
+    if ($TestMode) { Write-Host "`n=== SYSLOG ($($syslogMsg.Length) bytes) ===`n$syslogMsg`n======================`n" -ForegroundColor Cyan; return }
+    $protocol = if ($syslog.protocol) { $syslog.protocol.ToLower() } else { "tcp" }
+    try {
+        if ($protocol -eq "tcp") {
+            $tcp = New-Object System.Net.Sockets.TcpClient
+            $tcp.Connect($syslog.server, $syslog.port)
+            $tcp.GetStream().Write([System.Text.Encoding]::UTF8.GetBytes($syslogMsg + "`n"), 0, $syslogMsg.Length + 1)
+            $tcp.Close()
+            Write-Log "Syslog inviato (TCP): $MessageType ($($syslogMsg.Length) bytes)"
+        } else {
+            $udp = New-Object System.Net.Sockets.UdpClient
+            $udp.Send([System.Text.Encoding]::UTF8.GetBytes($syslogMsg), $syslogMsg.Length, $syslog.server, $syslog.port) | Out-Null
+            $udp.Close()
+            Write-Log "Syslog inviato (UDP): $MessageType ($($syslogMsg.Length) bytes)"
+        }
+    } catch { Write-Log "Errore syslog: $_" -Level Error; Write-ErrorVerbose -Context "Send-Syslog $MessageType" -ErrorRecord $_ }
+}
+
+function Send-Message {
+    param([string]$MessageType, [hashtable]$Data)
+    if ($Script:HeartbeatTypes -contains $MessageType -and $Script:Config.gelf -and $Script:Config.gelf.server) {
+        Send-Gelf -MessageType $MessageType -Data $Data
+    } else {
+        Send-Syslog -MessageType $MessageType -Data $Data
     }
 }
 #endregion
@@ -121,6 +180,10 @@ function Send-Syslog {
 function Initialize-Veeam {
     Write-Log "Caricamento modulo Veeam..."
     if (-not (Get-Module -Name Veeam.Backup.PowerShell -ErrorAction SilentlyContinue)) {
+        $prevVerbose = $VerbosePreference
+        $prevWarning = $WarningPreference
+        $VerbosePreference = 'SilentlyContinue'
+        $WarningPreference = 'SilentlyContinue'
         try {
             Import-Module Veeam.Backup.PowerShell -ErrorAction Stop
         }
@@ -131,6 +194,10 @@ function Initialize-Veeam {
             } else {
                 throw "Modulo Veeam PowerShell non trovato"
             }
+        }
+        finally {
+            $VerbosePreference = $prevVerbose
+            $WarningPreference = $prevWarning
         }
     }
     Write-Log "Modulo Veeam caricato"
@@ -238,10 +305,11 @@ function Get-VeeamServerStatus {
             memory_total_gb = $memTotalGb
         } + $licenseData
 
-        Send-Syslog -MessageType "VEEAM_SERVER_STATUS" -Data $status
+        Send-Message -MessageType "VEEAM_SERVER_STATUS" -Data $status
     }
     catch {
         Write-Log "Errore raccolta stato server: $_" -Level Error
+        Write-ErrorVerbose -Context "Get-VeeamServerStatus" -ErrorRecord $_
     }
 }
 
@@ -277,10 +345,11 @@ function Get-VeeamServiceStatus {
             services = $services
         }
 
-        Send-Syslog -MessageType "VEEAM_SERVICE_STATUS" -Data $serviceData
+        Send-Message -MessageType "VEEAM_SERVICE_STATUS" -Data $serviceData
     }
     catch {
         Write-Log "Errore raccolta stato servizi: $_" -Level Warning
+        Write-ErrorVerbose -Context "Get-VeeamServiceStatus" -ErrorRecord $_
     }
 }
 
@@ -309,10 +378,11 @@ function Get-VeeamRepositoryStatus {
                 free_gb = [math]::Round($freeBytes / 1GB, 2)
             }
 
-            Send-Syslog -MessageType "VEEAM_REPOSITORY_STATUS" -Data $repoData
+            Send-Message -MessageType "VEEAM_REPOSITORY_STATUS" -Data $repoData
         }
         catch {
             Write-Log "Errore lettura repository $($repo.Name): $_" -Level Warning
+            Write-ErrorVerbose -Context "Get-VeeamRepositoryStatus $($repo.Name)" -ErrorRecord $_
         }
     }
 }
@@ -512,7 +582,7 @@ function Get-VeeamJobResults {
                     $jobData.error_details = $errorDetails
                 }
 
-                Send-Syslog -MessageType "VEEAM_JOB_RESULT" -Data $jobData
+                Send-Message -MessageType "VEEAM_JOB_RESULT" -Data $jobData
                 Write-Log "Job '$($job.Name)': $status"
             }
             # Se non c'è sessione recente, NON inviare nulla (evita di sporcare la storia)
@@ -520,6 +590,7 @@ function Get-VeeamJobResults {
     }
     catch {
         Write-Log "Errore raccolta risultati job: $_" -Level Error
+        Write-ErrorVerbose -Context "Get-VeeamJobResults" -ErrorRecord $_
     }
 }
 
@@ -596,7 +667,7 @@ function Get-VeeamDailyReport {
         jobs = $allJobResults
     }
 
-    Send-Syslog -MessageType "VEEAM_DAILY_REPORT" -Data $reportData
+    Send-Message -MessageType "VEEAM_DAILY_REPORT" -Data $reportData
     Write-Log "Report giornaliero inviato: $($allJobResults.Count) job ($successCount ok, $warningCount warning, $failedCount failed)"
 }
 #endregion
@@ -611,30 +682,54 @@ try {
     }
     $Script:Config = Get-Content $ConfigPath -Raw | ConvertFrom-Json
 
+    # GELF abilitato di default: stesso server di syslog, porta 8514
+    if (-not $Script:Config.gelf -or -not $Script:Config.gelf.server) {
+        $gelfServer = if ($Script:Config.syslog -and $Script:Config.syslog.server) { $Script:Config.syslog.server } else { "localhost" }
+        $Script:Config | Add-Member -MemberType NoteProperty -Name "gelf" -Value ([PSCustomObject]@{ server = $gelfServer; port = 8514; protocol = "udp" }) -Force
+    }
+
     # Crea directory log
     if ($Script:Config.log_path -and -not (Test-Path $Script:Config.log_path)) {
         New-Item -ItemType Directory -Path $Script:Config.log_path -Force | Out-Null
     }
 
+    # Log verbose: attivo con -VerboseLog o config.verbose_log (per test/debug)
+    $Script:VerboseLogEnabled = ($VerboseLog -or $Script:Config.verbose_log) -and $Script:Config.log_path
+    if ($VerboseLog -or $Script:Config.verbose_log) {
+        if (-not $Script:Config.log_path) {
+            Write-Log "verbose_log attivo ma log_path non configurato - log verbose disabilitato" -Level Warning
+        } else {
+            Write-Log "Log verbose attivo -> $($Script:Config.log_path)\veeam-monitor-verbose-$(Get-Date -Format 'yyyy-MM-dd').log"
+            Write-VerboseLog "========== AVVIO ESECUZIONE (DailyReport=$DailyReport, TestMode=$TestMode) =========="
+        }
+    }
+
     # Inizializza Veeam
     Initialize-Veeam
 
+    $logErr = { param($ctx, $err) Write-Log "ERRORE $ctx : $err" -Level Error; Write-ErrorVerbose -Context $ctx -ErrorRecord $err }
     if ($DailyReport) {
         # Report giornaliero (07:00): stato completo + riepilogo 24h
-        # Ogni funzione e isolata: se una fallisce le altre continuano
-        try { Get-VeeamServerStatus } catch { Write-Log "ERRORE Get-VeeamServerStatus: $_" -Level Error }
-        try { Get-VeeamServiceStatus } catch { Write-Log "ERRORE Get-VeeamServiceStatus: $_" -Level Error }
-        try { Get-VeeamRepositoryStatus } catch { Write-Log "ERRORE Get-VeeamRepositoryStatus: $_" -Level Error }
-        try { Get-VeeamDailyReport } catch { Write-Log "ERRORE Get-VeeamDailyReport: $_" -Level Error }
+        try { Get-VeeamServerStatus } catch { & $logErr "Get-VeeamServerStatus" $_ }
+        try { Get-VeeamServiceStatus } catch { & $logErr "Get-VeeamServiceStatus" $_ }
+        try { Get-VeeamRepositoryStatus } catch { & $logErr "Get-VeeamRepositoryStatus" $_ }
+        try { Get-VeeamDailyReport } catch { & $logErr "Get-VeeamDailyReport" $_ }
     } else {
-        # Monitoraggio standard (ogni 30 min): solo risultati job
-        Get-VeeamJobResults
+        # Monitoraggio standard (ogni 30 min): stato sistema, repository e risultati job
+        try { Get-VeeamServerStatus } catch { & $logErr "Get-VeeamServerStatus" $_ }
+        try { Get-VeeamServiceStatus } catch { & $logErr "Get-VeeamServiceStatus" $_ }
+        try { Get-VeeamRepositoryStatus } catch { & $logErr "Get-VeeamRepositoryStatus" $_ }
+        try { Get-VeeamJobResults } catch { & $logErr "Get-VeeamJobResults" $_ }
     }
 
     Write-Log "=== Completato ==="
+    if ($Script:VerboseLogEnabled) {
+        Write-VerboseLog "========== FINE ESECUZIONE =========="
+    }
 }
 catch {
     Write-Log "ERRORE: $_" -Level Error
+    Write-ErrorVerbose -Context "Main" -ErrorRecord $_
     exit 1
 }
 finally {

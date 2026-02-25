@@ -1,18 +1,8 @@
 {
-    "client": {
-        "code": "CLI001",
-        "name": "Nome Cliente",
-        "site": "sede-principale"
-    },
-    "veeam": {
-        "server": "localhost",
-        "lookback_hours": 24
-    },
-    "syslog": {
-        "server": "graylog.example.com",
-        "port": 4514,
-        "facility": "local0",
-        "protocol": "tcp"
-    },
-    "log_path": "C:\\BackupMonitor\\Logs"
+  "client": {"code": "CLI001", "name": "Nome Cliente", "site": "sede-principale"},
+  "veeam": {"server": "localhost", "lookback_hours": 24},
+  "syslog": {"server": "graylog.example.com", "port": 4514, "facility": "local0", "protocol": "tcp"},
+  "gelf": {"server": "graylog.example.com", "port": 8514, "protocol": "udp"},
+  "log_path": "C:\\BackupMonitor\\Logs",
+  "verbose_log": false
 }
