@@ -1,358 +1,90 @@
-# Veeam Reporter - Documentazione Progetto
+> Regole comuni a tutti i progetti → `~/.claude/CLAUDE.md`
 
-## Panoramica
+# CLAUDE.md — Veeam Reporter
 
-**Veeam Reporter** è un sistema di monitoraggio distribuito per backup che raccoglie metriche e risultati da diverse piattaforme di backup (Veeam Backup & Replication, Proxmox Backup Server, Proxmox VE) e li invia a Graylog tramite syslog UDP in formato JSON strutturato.
+Sistema di monitoraggio distribuito per backup: agent su Veeam B&R, Proxmox Backup Server e Proxmox VE raccolgono metriche/risultati e li inviano a **Graylog** via syslog/GELF in JSON strutturato.
+**Non è:** una piattaforma con backend proprio (non ha DB/UI; dashboard e alert vivono in Graylog). Slegato da DA-Vul-can/DA-IPAM, nessun modulo condiviso.
 
-### Scopo
+## Pointer
 
-Il sistema permette di centralizzare il monitoraggio di:
-- Stato dei server di backup (CPU, memoria, uptime, versione)
-- Utilizzo dello storage (repository/datastore con soglie di allarme)
-- Risultati dei job/task di backup (successo, warning, errori con dettagli)
-- Copertura backup (verifica VM/CT senza backup schedulato)
-- Report giornalieri aggregati
+- Config Graylog (extractors/pipeline/setup): [graylog/](graylog/) — `extractors.json`, `pipeline-rules.txt`, `README.md`
+- Skills (workflow): — (assenti)
+- Rules file-scoped: — (assenti)
+- ADR: — (assenti)
+- Regole comuni a tutti i progetti: `~/.claude/CLAUDE.md`
 
-### Architettura
+## Stack vincolante
 
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  Veeam B&R      │     │  PBS Server     │     │  Proxmox VE     │
-│  (Windows)      │     │  (Linux)        │     │  (Linux)        │
-└────────┬────────┘     └────────┬────────┘     └────────┬────────┘
-         │                       │                       │
-         ▼                       ▼                       ▼
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  Agent PS1      │     │  Agent Python   │     │  Agent Python   │
-│  (PowerShell)   │     │  (pbs_monitor)  │     │  (pve_monitor)  │
-└────────┬────────┘     └────────┬────────┘     └────────┬────────┘
-         │                       │                       │
-         └───────────────────────┴───────────────────────┘
-                                 │
-                                 ▼
-                    ┌────────────────────────┐
-                    │ Syslog TCP 4514        │
-                    │ GELF UDP 8514 (Veeam)  │
-                    │ RFC 5424 + JSON        │
-                    └────────────┬───────────┘
-                                 │
-                                 ▼
-                    ┌────────────────────────┐
-                    │      Graylog           │
-                    │  (Extractors/Pipelines)│
-                    └────────────┬───────────┘
-                                 │
-                                 ▼
-                    ┌────────────────────────┐
-                    │  Dashboard & Alerts    │
-                    └────────────────────────┘
-```
+- **Agent Veeam** ([agents/veeam/VeeamBackupMonitor.ps1](agents/veeam/VeeamBackupMonitor.ps1)): PowerShell 5.1+ · modulo Veeam Backup & Replication · config `config.json`.
+- **Agent PBS** ([agents/pbs/pbs_monitor.py](agents/pbs/pbs_monitor.py)): Python 3.6+ · `requests`, `pyyaml` · config `/etc/backup-monitor/pbs-config.yaml`.
+- **Agent PVE** ([agents/pve/pve_monitor.py](agents/pve/pve_monitor.py)): Python 3.6+ · solo `pyyaml`, usa `pvesh` CLI nativo (no auth) · config `/etc/backup-monitor/pve-config.yaml`.
+- Versione corrente **2.16.3** · SemVer · campo `version` incluso in ogni messaggio.
 
-## Componenti Principali
+**Trappole:** syslog UDP non garantisce delivery (scelto per performance/semplicità) · tutti i timestamp in **UTC ISO 8601** · PVE usa `pvesh` locale quindi va eseguito *sul nodo* PVE.
 
-### 1. Agent Veeam (Windows)
+## Comandi essenziali
 
-**File:** `agents/veeam/VeeamBackupMonitor.ps1`
-
-- **Linguaggio:** PowerShell 5.1+
-- **Dipendenze:** Veeam Backup & Replication PowerShell Module
-- **Esecuzione:** Scheduled Task Windows ogni 30 minuti
-- **Configurazione:** `config.json` (creato da `config.example.json`)
-
-**Funzionalità:**
-- Raccoglie stato server Veeam (CPU, RAM, uptime, versione, licenza)
-- Verifica stato servizi Windows Veeam
-- Monitora repository di backup (spazio, utilizzo)
-- Raccoglie risultati job di backup completati (lookback 24h)
-- Invia report giornaliero alle 07:00
-
-**Messaggi inviati:**
-- `VEEAM_SERVER_STATUS` - Stato server e licenza (GELF 8514)
-- `VEEAM_SERVICE_STATUS` - Stato servizi Windows (GELF 8514)
-- `VEEAM_REPOSITORY_STATUS` - Spazio repository (GELF 8514)
-- `VEEAM_JOB_RESULT` - Risultato singolo job (Syslog 4514)
-- `VEEAM_DAILY_REPORT` - Riepilogo giornaliero (GELF 8514)
-
-### 2. Agent PBS (Linux)
-
-**File:** `agents/pbs/pbs_monitor.py`
-
-- **Linguaggio:** Python 3.6+
-- **Dipendenze:** `requests`, `pyyaml`
-- **Esecuzione:** systemd timer ogni 30 minuti
-- **Configurazione:** `/etc/backup-monitor/pbs-config.yaml`
-
-**Funzionalità:**
-- Connessione API PBS (porta 8007) tramite token
-- Raccoglie stato server PBS (CPU, RAM, uptime, versione)
-- Monitora datastore (spazio, utilizzo)
-- Raccoglie risultati task backup completati (lookback 24h)
-- Invia report giornaliero alle 07:00
-
-**Messaggi inviati:**
-- `PBS_SERVER_STATUS` - Stato server
-- `PBS_DATASTORE_STATUS` - Spazio datastore
-- `PBS_BACKUP_RESULT` - Risultato singolo task
-- `PBS_DAILY_REPORT` - Riepilogo giornaliero
-
-### 3. Agent PVE (Linux)
-
-**File:** `agents/pve/pve_monitor.py`
-
-- **Linguaggio:** Python 3.6+
-- **Dipendenze:** `pyyaml` (solo, usa `pvesh` nativo)
-- **Esecuzione:** systemd timer ogni 30 minuti
-- **Configurazione:** `/etc/backup-monitor/pve-config.yaml`
-
-**Funzionalità:**
-- Usa `pvesh` CLI locale (non richiede autenticazione)
-- Raccoglie stato nodo PVE (CPU, RAM, uptime, versione)
-- Monitora storage PVE (local, NFS, CIFS, PBS backend)
-- Raccoglie risultati task vzdump completati (lookback 24h)
-- Verifica copertura backup (VM/CT senza backup schedulato)
-- Invia report giornaliero alle 07:00
-
-**Messaggi inviati:**
-- `PVE_NODE_STATUS` - Stato nodo
-- `PVE_STORAGE_STATUS` - Spazio storage
-- `PVE_BACKUP_RESULT` - Risultato singolo task vzdump
-- `PVE_BACKUP_COVERAGE` - VM/CT senza backup
-- `PVE_DAILY_REPORT` - Riepilogo giornaliero
-
-### 4. Configurazione Graylog
-
-**Directory:** `graylog/`
-
-- **extractors.json** - Extractors JSON per parsing automatico
-- **pipeline-rules.txt** - Pipeline rules per parsing avanzato
-- **README.md** - Istruzioni setup Graylog
-
-## Formato Messaggi Syslog
-
-### Protocollo
-
-- **Standard:** RFC 5424
-- **Trasporto:** UDP
-- **Porta:** 4514 (configurabile)
-- **Payload:** JSON nel campo `message` del syslog
-
-### Struttura Messaggio
-
-```
-<priority>1 timestamp hostname app-name procid msgid - {json_payload}
-```
-
-**Priority:** `(facility * 8) + severity`
-- Facility: local0-local7 (default: local0 = 16)
-- Severity: 6=Info (success), 4=Warning, 3=Error (failed)
-
-### Campi Comuni (tutti i messaggi)
-
-```json
-{
-  "message_type": "VEEAM_SERVER_STATUS",
-  "version": "2.16.3",
-  "timestamp": "2026-02-09T10:30:00.000Z",
-  "client": {
-    "code": "CLI001",
-    "name": "Azienda Srl",
-    "site": "sede-principale"
-  },
-  "agent_hostname": "veeam-server-01",
-  "status": "success|warning|failed"
-}
-```
-
-### Mapping Status → Severity
-
-| Status   | Severity | Significato     |
-|----------|----------|-----------------|
-| success  | 6        | Informational   |
-| warning  | 4        | Warning         |
-| failed   | 3        | Error           |
-
-### Soglie Storage
-
-| Utilizzo | Status   | Severity |
-|----------|----------|----------|
-| 0-90%    | success  | 6        |
-| 90-95%   | warning  | 4        |
-| > 95%    | failed   | 3        |
-
-## Convenzioni di Codice
-
-### PowerShell (Veeam Agent)
-
-- **Error Handling:** `$ErrorActionPreference = "Stop"` per fail-fast
-- **Logging:** Funzione `Write-Log` con livelli Info/Warning/Error
-- **Configurazione:** JSON caricato all'inizio, validato
-- **Syslog:** Funzione `Send-Syslog` con formato RFC 5424
-- **Test Mode:** Flag `-TestMode` stampa messaggi senza inviarli
-
-### Python (PBS/PVE Agents)
-
-- **Logging:** Modulo `logging` standard con formato strutturato
-- **Configurazione:** YAML caricato con `pyyaml`
-- **Error Handling:** Try/except con logging degli errori
-- **Syslog:** Classe `SyslogSender` riutilizzabile
-- **Test Mode:** Flag `--test` stampa messaggi senza inviarli
-- **Type Hints:** Utilizzati per migliorare la leggibilità
-
-### Struttura Configurazione
-
-**Veeam (JSON):**
-```json
-{
-  "client": {
-    "code": "CLI001",
-    "name": "Azienda Srl",
-    "site": "sede-principale"
-  },
-  "syslog": {
-    "server": "graylog.example.com",
-    "port": 4514,
-    "facility": "local0",
-    "protocol": "tcp"
-  },
-  "gelf": {
-    "server": "graylog.example.com",
-    "port": 8514,
-    "protocol": "udp"
-  },
-  "veeam": {
-    "lookback_hours": 24
-  },
-  "log_path": "C:\\BackupMonitor\\Logs"
-}
-```
-
-**PBS/PVE (YAML):**
-```yaml
-client:
-  code: CLI001
-  name: Azienda Srl
-  site: sede-principale
-
-syslog:
-  server: graylog.example.com
-  port: 4514
-  facility: local0
-
-pbs:  # o pve
-  host: pbs.example.com
-  port: 8007
-  user: monitor@pbs
-  token_name: monitor-token
-  token_value: "..."
-  verify_ssl: false
-  lookback_hours: 24
-```
-
-## Installazione e Deployment
-
-### Veeam Agent
-
-1. Copia file da `agents/veeam/` in `C:\BackupMonitor\`
-2. Esegui `Install-Task.ps1` come amministratore
-3. Configurazione interattiva (codice cliente, Graylog server)
-4. Task schedulato creato automaticamente
-
-### PBS Agent
-
-1. Scarica repository
-2. Esegui `install.sh` come root
-3. Configurazione interattiva (codice cliente, credenziali PBS, Graylog)
-4. Timer systemd creato e attivato automaticamente
-
-### PVE Agent
-
-1. Scarica repository
-2. Esegui `install.sh` come root
-3. Configurazione interattiva (codice cliente, Graylog)
-4. Timer systemd creato e attivato automaticamente
-
-## Testing e Debug
-
-### Modalità Test
-
-Tutti gli agent supportano una modalità test che stampa i messaggi syslog senza inviarli:
-
-**Veeam:**
 ```powershell
+.\VeeamBackupMonitor.ps1 -TestMode          # stampa i messaggi senza inviarli
+.\Install-Task.ps1                           # crea Scheduled Task (admin), config interattiva
+```
+
+```bash
+python3 pbs_monitor.py -c config.yaml --test # stampa i messaggi senza inviarli (PBS/PVE)
+sudo ./install.sh                            # crea timer systemd, config interattiva (PBS/PVE)
+```
+
+Esecuzione runtime: Scheduled Task (Veeam) / systemd timer (PBS/PVE) ogni 30 min; report giornaliero alle 07:00.
+
+## Architettura
+
+- **3 agent → Graylog.** Veeam (Windows, PS1) · PBS (Linux, Python API porta 8007 via token) · PVE (Linux, Python via `pvesh`).
+- **Trasporto:** Syslog TCP/UDP **4514** (RFC 5424, JSON nel campo `message`) · GELF UDP **8514** (usato dall'agent Veeam per status/repository/daily).
+- **Priority syslog** = `facility*8 + severity`; facility default `local0`(16).
+- **Mapping status→severity:** `success`→6 (Info) · `warning`→4 · `failed`→3.
+- **Soglie storage:** 0-90% success · 90-95% warning · >95% failed.
+- **Campi comuni** in ogni payload: `message_type`, `version`, `timestamp`, `client{code,name,site}`, `agent_hostname`, `status`.
+- **Message types:** Veeam `VEEAM_{SERVER,SERVICE,REPOSITORY}_STATUS|JOB_RESULT|DAILY_REPORT` · PBS `PBS_{SERVER_STATUS,DATASTORE_STATUS,BACKUP_RESULT,DAILY_REPORT}` · PVE `PVE_{NODE_STATUS,STORAGE_STATUS,BACKUP_RESULT,BACKUP_COVERAGE,DAILY_REPORT}`.
+- Lookback job completati default 24h (configurabile).
+
+## Regole anti-regressione (CRITICHE — violazione = bug latente)
+
+1. **Versione in ogni messaggio**: bump `version` (SemVer) ad ogni modifica agli agent; il campo è incluso in ogni payload syslog e usato per tracciare la release attiva.
+2. **`config.json` mai committato**: solo `config.example.json` nel repo (contiene token PBS in chiaro). Vedi `.gitignore`.
+3. **Timestamp UTC ISO 8601** sempre: Graylog assume UTC; orari locali rompono extractors/pipeline.
+4. **JSON compresso** (no spazi) nel payload syslog per efficienza — non riformattare.
+5. **Test prima dell'invio**: validare con `-TestMode` / `--test` (stampa senza inviare) prima di deployare su client.
+6. **Status→severity coerente**: mantenere il mapping (success=6, warning=4, failed=3); gli alert Graylog dipendono da queste severity.
+7. **Aggiornamento client = copia file**: nessun riavvio necessario, Scheduled Task/timer usano la nuova versione alla prossima esecuzione.
+
+## Verifica obbligatoria post-modifica
+
+```bash
+# Veeam
 .\VeeamBackupMonitor.ps1 -TestMode
-```
-
-**PBS/PVE:**
-```bash
+# PBS/PVE
 python3 pbs_monitor.py -c config.yaml --test
+# Log runtime
+#   Veeam: C:\BackupMonitor\Logs\veeam-monitor-YYYY-MM-DD.log
+#   PBS/PVE: journalctl -u pbs-monitor.service | journalctl -u pve-monitor.service
 ```
 
-### Verifica Log
+## File critici (non rompere senza migration)
 
-**Veeam:** `C:\BackupMonitor\Logs\veeam-monitor-YYYY-MM-DD.log`
+| File | Perché |
+| --- | --- |
+| [agents/veeam/VeeamBackupMonitor.ps1](agents/veeam/VeeamBackupMonitor.ps1) | Agent Windows; `Send-Syslog` RFC 5424 + GELF, raccolta stato/job |
+| [agents/pbs/pbs_monitor.py](agents/pbs/pbs_monitor.py) | Agent PBS via API token (porta 8007); classe `SyslogSender` |
+| [agents/pve/pve_monitor.py](agents/pve/pve_monitor.py) | Agent PVE via `pvesh`; include backup-coverage VM/CT |
+| [graylog/extractors.json](graylog/extractors.json) · [graylog/pipeline-rules.txt](graylog/pipeline-rules.txt) | Parsing lato Graylog; il formato payload deve restare allineato |
+| `config.example.json` / `*-config.yaml` | Schema config: `client`, `syslog{server,port,facility}`, `gelf`, sezione `veeam|pbs|pve` (host/token/lookback) |
 
-**PBS/PVE:** `journalctl -u pbs-monitor.service` o `journalctl -u pve-monitor.service`
+## Loop di apprendimento (fine sessione)
 
-## Versioning
+Prima di chiudere, valuta:
 
-- **Versione corrente:** 2.16.3
-- **Formato:** SemVer (Major.Minor.Patch)
-- **Campo versione:** Incluso in ogni messaggio syslog
-
-## Aggiornamento
-
-### 1. Scarica la versione aggiornata
-
-```bash
-cd /path/to/Veeamreporter
-git pull origin main
-```
-
-### 2. Aggiorna i client
-
-**Veeam (Windows):**
-```powershell
-# Copia il file aggiornato (da un PC con il repo)
-Copy-Item .\agents\veeam\VeeamBackupMonitor.ps1 -Destination \\SERVER\C$\BackupMonitor\
-
-# Oppure download diretto da GitHub
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/grandir66/Veeamreporter/main/agents/veeam/VeeamBackupMonitor.ps1" -OutFile "C:\BackupMonitor\VeeamBackupMonitor.ps1" -UseBasicParsing
-```
-
-**PVE (Linux):**
-```bash
-scp agents/pve/pve_monitor.py root@NODO-PVE:/usr/local/bin/
-# oppure dove è installato (es. /opt/backup-monitor/)
-```
-
-**PBS (Linux):**
-```bash
-scp agents/pbs/pbs_monitor.py root@PBS-SERVER:/usr/local/bin/
-```
-
-### 3. Nessun riavvio necessario
-
-Il Scheduled Task (Veeam) e i timer systemd (PVE/PBS) useranno automaticamente la nuova versione alla prossima esecuzione.
-
-## Repository Git
-
-- **URL:** https://github.com/grandir66/Veeamreporter.git
-- **Branch principale:** `main`
-- **File esclusi:** `config.json` (non committato, solo `config.example.json`)
-
-## Estensioni Future
-
-Possibili miglioramenti:
-- Supporto per altre piattaforme di backup
-- Metriche aggiuntive (throughput, deduplicazione)
-- Alerting integrato (non solo via Graylog)
-- API REST per query stato
-- Dashboard web standalone
-
-## Note Tecniche
-
-- **Syslog UDP:** Non garantisce delivery, ma è performante e semplice
-- **Lookback:** Default 24h per job completati, configurabile
-- **Timezone:** Tutti i timestamp in UTC ISO 8601
-- **JSON:** Compresso (no spazi) per efficienza
-- **Facility Syslog:** Configurabile per separare log da altri sistemi
+- **Pattern riutilizzabile?** → nuova rule in `.claude/rules/` (scope file) o skill in `.claude/skills/` (workflow)
+- **Errore commesso 2+ volte?** → nuova regola anti-regressione qui sopra
+- **Decisione architetturale?** → ADR in `docs/adr/`
+- **Fatto nuovo sul progetto?** → aggiorna questo file
+- **Regola comportamentale trasversale?** → `~/.claude/CLAUDE.md` (vale per tutti)

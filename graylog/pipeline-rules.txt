@@ -8,7 +8,7 @@
 // 3. Collega le regole alla pipeline in ordine (Stage 0, Stage 1, etc.)
 // 4. Collega la pipeline allo stream "All messages" o crea uno stream dedicato
 //
-// REGOLE: 8 totali (1 Stage 0 + 7 Stage 1)
+// REGOLE: 9 totali (1 Stage 0 + 8 Stage 1)
 //
 // NOTA: Il campo "message" di Graylog contiene il formato:
 //   MSGID - {"message_type":"...", ...}
@@ -163,7 +163,26 @@ then
 end
 
 // ----------------------------------------------------------------------------
-// RULE 6: Parse campi specifici PVE_BACKUP_RESULT (Stage 1)
+// RULE 6: Parse campi specifici PVE_BACKUP_JOB (Stage 1)
+// ----------------------------------------------------------------------------
+rule "backup_monitor_pve_backup_job"
+when
+    has_field("backup_message_type") AND
+    to_string($message.backup_message_type) == "PVE_BACKUP_JOB"
+then
+    let data = parse_json(to_string($message.backup_json));
+
+    set_field("job_id", data.job_id);
+    set_field("nodes", data.nodes);
+    set_field("storage", data.storage);
+    set_field("schedule", data.schedule);
+    set_field("enabled", data.enabled);
+    set_field("mode", data.mode);
+    set_field("vm_count", data.vm_count);
+end
+
+// ----------------------------------------------------------------------------
+// RULE 7: Parse campi specifici PVE_BACKUP_RESULT (Stage 1)
 // ----------------------------------------------------------------------------
 rule "backup_monitor_pve_backup"
 when
@@ -184,7 +203,7 @@ then
 end
 
 // ----------------------------------------------------------------------------
-// RULE 7: Parse campi specifici PVE_BACKUP_COVERAGE (Stage 1)
+// RULE 8: Parse campi specifici PVE_BACKUP_COVERAGE (Stage 1)
 // ----------------------------------------------------------------------------
 rule "backup_monitor_pve_coverage"
 when
@@ -197,7 +216,7 @@ then
 end
 
 // ----------------------------------------------------------------------------
-// RULE 8: Parse campi DAILY REPORT (Stage 1)
+// RULE 9: Parse campi DAILY REPORT (Stage 1)
 // ----------------------------------------------------------------------------
 rule "backup_monitor_daily_report"
 when

@@ -22,13 +22,13 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-VERSION = "2.0.0"
+VERSION = "2.16.3"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
 
 class SyslogSender:
-    """Invia messaggi syslog RFC 5424 via TCP o UDP"""
+    """Invia messaggi syslog RFC 5424 via TCP o UDP - formato: MSGID - {json}"""
 
     FACILITY_MAP = {
         "local0": 16, "local1": 17, "local2": 18, "local3": 19,
@@ -42,9 +42,8 @@ class SyslogSender:
         self.protocol = protocol.lower()
 
     def send(self, message_type: str, data: Dict, client: Dict, test_mode: bool = False):
-        """Invia messaggio syslog con payload JSON"""
+        """Invia messaggio syslog: MSGID - {json} su porta 4514 TCP"""
 
-        # Severity basata su status
         status = data.get("status", "success")
         severity = {"success": 6, "warning": 4, "failed": 3}.get(status, 6)
         priority = (self.facility * 8) + severity
@@ -62,7 +61,7 @@ class SyslogSender:
         }
 
         json_payload = json.dumps(payload, separators=(",", ":"), default=str)
-        syslog_msg = f"<{priority}>1 {timestamp} {hostname} pbs-backup-monitor {sys.argv[0]} {message_type} - {json_payload}"
+        syslog_msg = f"<{priority}>1 {timestamp} {hostname} pbs-backup-monitor pbs_monitor {message_type} - {json_payload}"
 
         if test_mode:
             print(f"\n=== SYSLOG MESSAGE ({len(syslog_msg)} bytes) ===\n{syslog_msg}\n======================\n")
